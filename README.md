@@ -1,25 +1,26 @@
 # multiagent-se
 
-`multiagent-se`, yazılım geliştirme görevlerinde dört LLM çalışma biçimini
-aynı görevler ve aynı model ayarları altında karşılaştırmak için geliştirilmiş
-deneysel bir Python çerçevesidir:
+`multiagent-se` is an experimental Python framework for comparing four LLM
+workflow configurations on software development tasks while holding the task
+inputs and model settings constant:
 
-1. `baseline`: tek çağrılık sistem referansı,
-2. `naive`: serbest metin planlayıcı-kodlayıcı devri,
-3. `structured_no_validation`: yapılandırılmış fakat doğrulanmayan devir,
-4. `contract`: şema doğrulaması ve sınırlı planlayıcı yeniden denemesi.
+1. `baseline`: a single-call system reference,
+2. `naive`: a free-form planner-to-coder handoff,
+3. `structured_no_validation`: a structured but unvalidated handoff,
+4. `contract`: schema validation with a bounded planner retry.
 
-`structured_no_validation` ve `contract` aynı planlayıcı/kodlayıcı yolunu
-kullanır. Aralarındaki tek müdahale doğrulayıcı düğümü ve sınırlı yeniden
-denemedir; bu invariant `tests/test_arm_equivalence.py` ile korunur.
+`structured_no_validation` and `contract` use the same planner and coder path.
+The validator node and bounded retry are the only interventions that differ
+between them; `tests/test_arm_equivalence.py` enforces this invariant.
 
-Bu public dağıtım kaynak kodu, dondurulmuş görev tanımlarını ve deterministik
-testleri içerir. Ham model çıktıları, deney sonuçları, makale taslakları,
-yayın görselleri ve iç çalışma notları bu repoda dağıtılmaz.
+This public distribution includes the source code, frozen task definitions,
+and deterministic tests. It does not distribute raw model outputs,
+experimental results, manuscript drafts, publication figures, or internal
+working notes.
 
-## Kurulum
+## Setup
 
-Gereksinimler: Python 3.12+, Git ve [uv](https://docs.astral.sh/uv/).
+Requirements: Python 3.12+, Git, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/lsaliherenl/multiagent-se-public.git
@@ -27,8 +28,8 @@ cd multiagent-se-public
 uv sync
 ```
 
-Canlı model çağrıları için örnek ortam dosyasını kopyalayıp yalnız yerel
-`.env` dosyasını doldurun:
+For live model calls, copy the example environment file and populate only your
+local `.env` file:
 
 ```bash
 cp .env.example .env
@@ -38,32 +39,32 @@ cp .env.example .env
 OPENROUTER_API_KEY=your_key_here
 ```
 
-`.env`, loglar, anahtar/sertifika dosyaları ve yayın çalışma alanları Git
-tarafından yok sayılır. Anahtarınızı komut satırına, commit mesajına veya hata
-çıktısına yapıştırmayın.
+Git ignores `.env`, logs, key and certificate files, and publication
+workspaces. Never paste an API key into a command line, commit message, or
+error output.
 
-## Hızlı doğrulama
+## Quick verification
 
-Testler ağ erişimi ya da gerçek API anahtarı gerektirmez:
+The test suite requires neither network access nor a real API key:
 
 ```bash
 uv run pytest -q
 ```
 
-İki görev kümesini kaynaklardan yeniden üretmek için:
+To regenerate both task sets from their sources:
 
 ```bash
 uv run python scripts/fetch_tasks.py
 uv run python scripts/fetch_evalplus.py
 ```
 
-İkinci komut sürüm-sabitli EvalPlus kaynaklarını indirir, SHA-256 değerlerini
-doğrular, uygunluk filtrelerini çalıştırır ve `tasks_heldout/` içeriğini
-deterministik olarak yeniden üretir.
+The second command downloads version-pinned EvalPlus sources, verifies their
+SHA-256 checksums, applies the eligibility filters, and deterministically
+rebuilds `tasks_heldout/`.
 
-## Deney çalıştırma
+## Running an experiment
 
-Önce küçük pilot setinde akışı doğrulayın:
+Validate the workflow on the small pilot set first:
 
 ```bash
 uv run python -m eval.runner \
@@ -74,7 +75,8 @@ uv run python -m eval.runner \
   --repeats 1
 ```
 
-Held-out çalışma bilinçli olarak açık model, görev seti ve tekrar sayısı ister:
+A held-out run intentionally requires explicit model, task-set, and repetition
+arguments:
 
 ```bash
 uv run python -m eval.runner \
@@ -84,47 +86,49 @@ uv run python -m eval.runner \
   --repeats 3
 ```
 
-Çıktılar `logs/exp_<name>/` altında oluşur ve version control'e girmez.
-Runner; görev hash'lerini, prompt sözleşmesini, ortamı ve Git commit'ini
-manifestte sabitler. Tam deney koşusu yalnız temiz ve commit edilmiş bir
-çalışma ağacından başlatılmalıdır.
+Outputs are written under `logs/exp_<name>/` and are excluded from version
+control. The runner records task hashes, the prompt contract, the environment,
+and the Git commit in its manifest. Start a full experimental run only from a
+clean, committed working tree.
 
-## Depo yapısı
+## Repository structure
 
-| Yol | İçerik |
+| Path | Contents |
 | --- | --- |
-| `agents/` | Planlayıcı, kodlayıcı, test edici ve doğrulayıcı rolleri |
-| `pipeline/` | Dört kolun LangGraph akışları |
-| `eval/` | Sandbox, harness, runner, sonuç sözleşmesi ve MAST araçları |
-| `analysis/` | Görev-düzeyi analiz ve keşifsel belirsizlik araçları |
-| `uncertainty/` | Self-consistency ölçümü |
-| `tasks/` | 20 görevlik development/pilot seti |
-| `tasks_heldout/` | 50 görevlik EvalPlus-türevi held-out set |
-| `scripts/` | Görev üretimi, sağlık ve uyumluluk yardımcıları |
-| `tests/` | Ağsız ve deterministik regresyon testleri |
+| `agents/` | Planner, coder, tester, and validator roles |
+| `pipeline/` | LangGraph workflows for the four experimental arms |
+| `eval/` | Sandbox, harness, runner, result contract, and MAST tooling |
+| `analysis/` | Task-level analysis and exploratory uncertainty tooling |
+| `uncertainty/` | Self-consistency measurement |
+| `tasks/` | 20-task development and pilot set |
+| `tasks_heldout/` | 50-task EvalPlus-derived held-out set |
+| `scripts/` | Task generation, health-check, and compliance utilities |
+| `tests/` | Offline, deterministic regression tests |
 
-Deney tasarımı ve yorumlama sınırları için
-[`EXPERIMENT_PROTOCOL.md`](EXPERIMENT_PROTOCOL.md), veri seti lisansları için
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) dosyasına bakın.
+See [`EXPERIMENT_PROTOCOL.md`](EXPERIMENT_PROTOCOL.md) for the experimental
+design and interpretation boundaries, and
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for dataset licensing.
 
-## Güvenlik uyarısı
+## Security warning
 
-Bu proje model tarafından üretilen Python kodunu alt süreçte çalıştırır.
-Uygulanan timeout, çıktı sınırı ve ortam değişkeni allowlist'i güçlü bir güvenlik
-sandbox'ı değildir; özellikle Windows üzerinde bellek/CPU izolasyonu sağlamaz.
-Güvenilmeyen kodu hassas verilerin veya ağ kimlik bilgilerinin bulunduğu bir
-makinede çalıştırmayın. Daha güçlü izolasyon için tek kullanımlık container ya
-da ayrı bir VM kullanın.
+This project executes model-generated Python code in a subprocess. Its timeout,
+output limit, and environment-variable allowlist do not constitute a strong
+security sandbox; in particular, they do not provide memory or CPU isolation
+on Windows. Do not run untrusted code on a machine that contains sensitive data
+or network credentials. Use a disposable container or a separate virtual
+machine when stronger isolation is required.
 
-## Sonuçların kapsamı
+## Scope of results
 
-Bu public kaynak dağıtımı herhangi bir performans sonucu veya etki iddiası
-yayımlamaz. Kodu kullanarak elde edilen sonuçlar, iki üretici model için ayrı
-analiz edilmeli; tekrarlar bağımsız örnekler gibi sayılmamalı ve yalnız
-EvalPlus-türevi equality-compatible alt kümeye genellenmelidir.
+This public source distribution makes no performance or effect claims. Results
+obtained with the code should be analyzed separately for the two provider
+models; repetitions must not be treated as independent samples, and findings
+should be generalized only to the EvalPlus-derived, equality-compatible
+subset.
 
-## Lisans
+## License
 
-Projenin özgün kaynak kodu [Apache License 2.0](LICENSE) altında yayımlanır.
-Üçüncü taraf benchmark içeriklerinin ayrı koşulları
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) içinde belirtilmiştir.
+The project's original source code is released under the
+[Apache License 2.0](LICENSE). Third-party benchmark content remains subject to
+the separate terms documented in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
