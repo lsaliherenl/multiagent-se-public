@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials*.json
+secrets*.json
+
+# Generated run data
+logs/*
+!logs/.gitkeep
+
+# Private research and publication workspace (defense in depth)
+/publication/
+/.claude/
+/BILDIRI_NOTLARI.md
+/CLAUDE.md
+/TAKIP_DENEYLERI_PLANI.md
+/FINAL_DENEY_PLANI.md
+/analysis/f9_*.py
+/analysis/claim_map.py
+/analysis/claim_registry.py
+/analysis/publication_*.py
+/analysis/style_gate.py
+/scripts/build_f9_*.py
+/scripts/build_p4_*.py
+/scripts/build_publication_artifacts.py
+/scripts/docx_to_pdf.ps1
+/scripts/f9_*.py
+/scripts/followup_*.py
+/scripts/format_f9_docx.py
+/scripts/p4_sections.py
+/scripts/revise_f9_docx.py
+/scripts/verify_claims.py
+/scripts/verify_f9_*.py
+/scripts/verify_style.py
+/eval/followup_*.py
+/tests/test_f9*.py
+/tests/test_followup_*.py
+/tests/test_claim_map.py
+/tests/test_publication_artifacts.py
+/tests/test_style_gate.py
+/tasks_followup_dev/
+/tasks_study2_complex/
+
+# Office/editor temporary files
+~$*.docx
+.~lock.*#
+*.bak
+*.tmp

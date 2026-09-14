@@ -1,0 +1,8 @@
+{
+  "task_id": "mbpp_003",
+  "source": "mbpp",
+  "prompt": "Write a python function to identify non-prime numbers.\n\nWrite a Python function named `is_not_prime`.\nExample test:\nassert is_not_prime(2) == False\n",
+  "entry_point": "is_not_prime",
+  "test_code": "def check(candidate):\n    assert candidate(2) == False\n    assert candidate(10) == True\n    assert candidate(35) == True\n    assert candidate(37) == False\n",
+  "reference_solution": "import math\ndef is_not_prime(n):\n    result = False\n    for i in range(2,int(math.sqrt(n)) + 1):\n        if n % i == 0:\n            result = True\n    return result"
+}

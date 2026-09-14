@@ -1,0 +1,8 @@
+{
+  "task_id": "mbpp_019",
+  "source": "mbpp",
+  "prompt": "Write a function to find whether a given array of integers contains any duplicate element.\n\nWrite a Python function named `test_duplicate`.\nExample test:\nassert test_duplicate(([1,2,3,4,5]))==False\n",
+  "entry_point": "test_duplicate",
+  "test_code": "def check(candidate):\n    assert candidate(([1,2,3,4,5]))==False\n    assert candidate(([1,2,3,4, 4]))==True\n    assert candidate([1,1,2,2,3,3,4,4,5])==True\n",
+  "reference_solution": "def test_duplicate(arraynums):\n    nums_set = set(arraynums)    \n    return len(arraynums) != len(nums_set)     "
+}

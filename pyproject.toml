@@ -1,0 +1,23 @@
+[project]
+name = "multiagent-se"
+version = "0.1.0"
+description = "Rol tabanlı çok-ajanlı LLM sistemlerinin yazılım geliştirme görevlerinde kontrollü değerlendirmesi (4 kol: baseline / naive / structured_no_validation / contract)"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.2",
+    "litellm>=1.60",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]
+# Paket olarak build edilmez; kod repo kökünden çalıştırılır (uv run ...)
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

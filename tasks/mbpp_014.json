@@ -1,0 +1,8 @@
+{
+  "task_id": "mbpp_014",
+  "source": "mbpp",
+  "prompt": "Write a python function to find the volume of a triangular prism.\n\nWrite a Python function named `find_Volume`.\nExample test:\nassert find_Volume(10,8,6) == 240\n",
+  "entry_point": "find_Volume",
+  "test_code": "def check(candidate):\n    assert candidate(10,8,6) == 240\n    assert candidate(3,2,2) == 6\n    assert candidate(1,2,1) == 1\n",
+  "reference_solution": "def find_Volume(l,b,h) : \n    return ((l * b * h) / 2) "
+}

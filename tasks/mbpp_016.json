@@ -1,0 +1,8 @@
+{
+  "task_id": "mbpp_016",
+  "source": "mbpp",
+  "prompt": "Write a function to that returns true if the input string contains sequences of lowercase letters joined with an underscore and false otherwise.\n\nWrite a Python function named `text_lowercase_underscore`.\nExample test:\nassert text_lowercase_underscore(\"aab_cbbbc\")==(True)\n",
+  "entry_point": "text_lowercase_underscore",
+  "test_code": "def check(candidate):\n    assert candidate(\"aab_cbbbc\")==(True)\n    assert candidate(\"aab_Abbbc\")==(False)\n    assert candidate(\"Aaab_abbbc\")==(False)\n",
+  "reference_solution": "import re\ndef text_lowercase_underscore(text):\n        patterns = '^[a-z]+_[a-z]+$'\n        if re.search(patterns,  text):\n                return True\n        else:\n                return False"
+}

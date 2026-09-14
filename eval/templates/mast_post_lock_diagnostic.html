@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+<title>MAST — Kilit Sonrası Self-Judge Diagnostic</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;margin:0;background:#f5f6f8;color:#20242b}
+main{max-width:1000px;margin:24px auto;padding:0 18px}h1{font-size:22px}
+.note{background:#fff4d6;border:1px solid #e2c26b;padding:12px;border-radius:8px}
+.row{background:white;border:1px solid #d8dce3;border-radius:8px;padding:14px;margin:12px 0}
+.label{white-space:pre-wrap;margin:5px 0}.muted{color:#626b78;font-size:13px}
+</style>
+</head>
+<body><main>
+<h1>MAST kilit sonrası tanısal görünüm</h1>
+<p class="note">Bu paket yalnız nihai insan kararı kilitlendikten sonra üretildi.
+Self-judge kararı nihai etiketi değiştirmez ve yalnız yanlılık/tanı analizi içindir.</p>
+<div id="meta" class="muted"></div><div id="records"></div>
+</main>
+<script>
+"use strict";
+var PAYLOAD_B64 = "__PAYLOAD_BASE64__";
+function decodePayload(b64){var bin=atob(b64),bytes=new Uint8Array(bin.length);
+for(var i=0;i<bin.length;i++){bytes[i]=bin.charCodeAt(i);}
+return JSON.parse(new TextDecoder("utf-8").decode(bytes));}
+function txt(el,value){el.textContent=value===null||value===undefined?"":String(value);}
+function describe(label){if(label.insufficient_context){return "yetersiz bağlam | güven: "+label.confidence;}
+var out=String(label.primary_mode);if(label.secondary_modes&&label.secondary_modes.length){out+=" (+ "+label.secondary_modes.join(", ")+")";}
+return out+" | güven: "+label.confidence;}
+var P=decodePayload(PAYLOAD_B64),host=document.getElementById("records");
+txt(document.getElementById("meta"),"dataset "+P.dataset_fingerprint.slice(0,12)+" | paket "+P.package_id.slice(0,12));
+for(var i=0;i<P.records.length;i++){var r=P.records[i],box=document.createElement("section");box.className="row";
+var h=document.createElement("h2");txt(h,(i+1)+" / "+P.records.length+" — "+r.record_id.slice(0,10));box.appendChild(h);
+var final=document.createElement("div");final.className="label";txt(final,"Nihai insan: "+describe(r.human_adjudicated_label));box.appendChild(final);
+var self=document.createElement("div");self.className="label";
+txt(self,"Self-judge (yalnız diagnostic): "+(r.self_judge_available?describe(r.self_judge_label):"self etiketi mevcut değil (judge şema uyumsuzluğu; karar katmanına girmez)"));box.appendChild(self);
+if(r.self_judge_available){var why=document.createElement("div");why.className="muted";txt(why,"Self gerekçesi: "+(r.self_judge_label.rationale||""));box.appendChild(why);}
+var cmp=document.createElement("div");cmp.className="muted";txt(cmp,"Dış karar: "+r.external_agreement_level+" | self eşleşmesi: "+r.self_matches_external);box.appendChild(cmp);
+host.appendChild(box);}
+</script></body></html>

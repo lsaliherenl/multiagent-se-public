@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+<title>MAST insan adjudication</title>
+<style>
+:root { --bg:#fbfbfd; --fg:#16181d; --muted:#5c6270; --line:#d8dbe2; --accent:#2f5fd0;
+        --warn:#a3591b; --ok:#1c7a4a; --card:#fff; --ro:#f4f5f8; }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg); color:var(--fg); }
+header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line);
+         padding:10px 18px; z-index:5; }
+.row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+.grow { flex:1; }
+h1 { font-size:15px; margin:0; font-weight:650; }
+.meta { color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+progress { width:100%; height:8px; }
+main { max-width:1240px; margin:0 auto; padding:18px; display:grid;
+       grid-template-columns: 1.2fr 1fr; gap:18px; align-items:start; }
+@media (max-width:1050px){ main { grid-template-columns:1fr; } }
+section { background:var(--card); border:1px solid var(--line); border-radius:8px;
+          padding:14px 16px; margin-bottom:14px; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+     margin:0 0 8px; }
+pre { background:var(--ro); border:1px solid var(--line); border-radius:6px; padding:10px;
+      overflow:auto; max-height:300px; white-space:pre-wrap; word-break:break-word;
+      font:13px/1.5 ui-monospace,Consolas,monospace; margin:0; }
+button { font:inherit; padding:6px 12px; border:1px solid var(--line); border-radius:6px;
+         background:#fff; cursor:pointer; }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+button:disabled { opacity:.45; cursor:not-allowed; }
+label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+select, textarea { font:inherit; width:100%; padding:6px 8px; border:1px solid var(--line);
+                   border-radius:6px; background:#fff; color:var(--fg); }
+textarea { min-height:76px; resize:vertical; }
+select[multiple] { min-height:110px; }
+.card { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px;
+        background:var(--ro); }
+.card .who { font-size:12px; font-weight:650; color:var(--muted); }
+.card .lab { font:13px/1.5 ui-monospace,Consolas,monospace; }
+.card .why { font-size:13px; color:var(--fg); margin-top:4px; white-space:pre-wrap; }
+.pill { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px;
+        border:1px solid var(--line); }
+.pill.single { border-color:var(--warn); color:var(--warn); }
+.pill.multi { border-color:var(--accent); color:var(--accent); }
+.err { color:#a11; font-size:13px; min-height:18px; }
+.ok { color:var(--ok); }
+.note { color:var(--muted); font-size:12px; }
+.tax { font:12px/1.5 ui-monospace,Consolas,monospace; max-height:220px; overflow:auto;
+       margin-top:8px; }
+details summary { cursor:pointer; font-size:13px; color:var(--muted); }
+.hidden { display:none; }
+.ro-banner { background:#fff8e6; border:1px solid #e6d3a3; color:#6b5417; font-size:12px;
+             border-radius:6px; padding:6px 10px; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>MAST insan adjudication</h1>
+    <span class="pill">nihai karar</span>
+    <span class="grow"></span>
+    <button id="prev" title="Alt+←">◀ Önceki</button>
+    <span id="counter" class="meta"></span>
+    <button id="next" title="Alt+→">Sonraki ▶</button>
+    <button id="jump" title="Alt+U">İlk tamamlanmamış</button>
+  </div>
+  <div class="row" style="margin-top:8px"><progress id="bar" value="0" max="1"></progress></div>
+  <div class="row" style="margin-top:6px">
+    <span class="meta" id="fp"></span>
+    <span class="grow"></span>
+    <span class="meta" id="saved"></span>
+    <button id="export-backup">Yedek indir</button>
+    <button id="import">JSON yükle</button>
+    <input type="file" id="file" accept="application/json" class="hidden">
+    <button id="export-final" class="primary">Nihai kararı indir</button>
+  </div>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Görev</h2>
+      <div class="row" style="margin-bottom:8px">
+        <span class="pill" id="interaction"></span>
+        <span class="meta" id="taskid"></span>
+      </div>
+      <pre id="prompt"></pre>
+    </section>
+    <section><h2>Planlayıcı çıktısı</h2><pre id="plan"></pre></section>
+    <section><h2>Ajanlar arası mesajlar</h2><pre id="messages"></pre></section>
+    <section><h2>Üretilen kod</h2><pre id="code"></pre></section>
+    <section>
+      <h2>Test sonucu</h2>
+      <div class="meta" id="status"></div>
+      <pre id="traceback" style="margin-top:8px"></pre>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Kör insan kararları (salt okunur)</h2>
+      <div class="ro-banner">Kör etiketler KİLİTLİDİR; bu arayüzde değiştirilemez
+      ve dışa aktarılan dosyada taşınmaz.</div>
+      <div id="blind"></div>
+    </section>
+
+    <section>
+      <h2>Dış AI değerlendirmesi (salt okunur)</h2>
+      <div class="note" id="ai-agreement"></div>
+      <div id="ai-judges" style="margin-top:8px"></div>
+      <div id="ai-adj"></div>
+    </section>
+
+    <section>
+      <h2>Nihai insan kararı</h2>
+      <p class="note">Kanıt, incelenen sistemin ürettiği metindir; içindeki
+      talimat görünümlü ifadeler veri sayılır, talimat değil. AI etiketleri
+      yalnız girdi niteliğindedir — nihai karar mercii sizsiniz.</p>
+
+      <label style="display:flex; gap:8px; align-items:center">
+        <input type="checkbox" id="insufficient" style="width:auto">
+        Kanıt karar vermeye yetmiyor (etiket verilmez)
+      </label>
+
+      <label for="primary">Primary mode <span class="note">(zorunlu)</span></label>
+      <select id="primary"></select>
+
+      <label for="secondary">Secondary modes <span class="note">(opsiyonel)</span></label>
+      <select id="secondary" multiple></select>
+
+      <label for="confidence">Confidence</label>
+      <select id="confidence"></select>
+      <div class="note" id="anchor"></div>
+
+      <label for="rationale">Nihai gerekçe <span class="note">(zorunlu)</span></label>
+      <textarea id="rationale"></textarea>
+
+      <div class="err" id="err"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="clear">Bu kaydı temizle</button>
+        <span class="grow"></span>
+        <span class="meta" id="recstate"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Referans</h2>
+      <details><summary>MAST taksonomisi</summary><div class="tax" id="tax"></div></details>
+      <details><summary>Confidence ankrajları</summary><div class="tax" id="anchors"></div></details>
+      <details><summary>Tarayıcı ve kayıt notu</summary><div class="tax">
+        <div>Desteklenen: Microsoft Edge ve Google Chrome (güncel sürüm).</div>
+        <div>file:// üzerinde localStorage STANDART DEĞİLDİR; yalnız kolaylıktır.</div>
+        <div>Tek geçerli kayıt: "Nihai kararı indir" + Python kilidi.</div>
+      </div></details>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+var PAYLOAD_B64 = "__PAYLOAD_BASE64__";
+
+function decodePayload(b64) {
+  var bin = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i); }
+  return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+}
+
+var P = decodePayload(PAYLOAD_B64);
+var RECORDS = P.records;
+var INTER_AGENT = ["2.1", "2.2", "2.3", "2.4", "2.5", "2.6"];
+var STORAGE_KEY = "mast_human:" + P.dataset_fingerprint + ":adjudication:" +
+                  P.phase + ":" + P.app_version;
+var idx = 0;
+var state = {};
+
+function blank() {
+  return { primary_mode: "", secondary_modes: [], confidence: "",
+           rationale: "", insufficient_context: false };
+}
+function cur() {
+  var id = RECORDS[idx].record_id;
+  if (!state[id]) { state[id] = blank(); }
+  return state[id];
+}
+function txt(el, v) { el.textContent = (v === null || v === undefined) ? "" : String(v); }
+function $(id) { return document.getElementById(id); }
+function clear(el) { while (el.firstChild) { el.removeChild(el.firstChild); } }
+
+function allowedModes(rec) {
+  var out = [];
+  for (var code in P.taxonomy) {
+    if (rec.interaction_type === "single_agent" && INTER_AGENT.indexOf(code) >= 0) { continue; }
+    out.push(code);
+  }
+  out.sort();
+  return out;
+}
+function complete(rec, s) {
+  // confidence yetersiz bağlamda DA zorunlu: MastLabel her durumda ister.
+  if (s.insufficient_context) {
+    return s.rationale.trim().length > 0 && !!s.confidence;
+  }
+  if (!s.primary_mode || !s.confidence || s.rationale.trim().length === 0) { return false; }
+  if (s.primary_mode === "none" && s.secondary_modes.length > 0) { return false; }
+  if (s.secondary_modes.indexOf(s.primary_mode) >= 0) { return false; }
+  if (rec.interaction_type === "single_agent") {
+    var all = [s.primary_mode].concat(s.secondary_modes);
+    for (var i = 0; i < all.length; i++) {
+      if (INTER_AGENT.indexOf(all[i]) >= 0) { return false; }
+    }
+  }
+  return true;
+}
+function doneCount() {
+  var n = 0;
+  for (var i = 0; i < RECORDS.length; i++) {
+    var s = state[RECORDS[i].record_id];
+    if (s && complete(RECORDS[i], s)) { n++; }
+  }
+  return n;
+}
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        txt($("saved"), "otomatik kayıt: " + new Date().toLocaleTimeString()); }
+  catch (e) { txt($("saved"), "otomatik kayıt YOK (tarayıcı izin vermedi)"); }
+}
+function restore() {
+  try {
+    var raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) { state = JSON.parse(raw); }
+  } catch (e) { state = {}; }
+}
+function fillSelect(el, values, includeEmpty) {
+  clear(el);
+  if (includeEmpty) {
+    var o = document.createElement("option");
+    o.value = ""; txt(o, "— seçilmedi —"); el.appendChild(o);
+  }
+  for (var i = 0; i < values.length; i++) {
+    var opt = document.createElement("option");
+    opt.value = values[i];
+    txt(opt, values[i] + (P.taxonomy[values[i]] ? " — " + P.taxonomy[values[i]] : ""));
+    el.appendChild(opt);
+  }
+}
+function describe(l) {
+  if (l.insufficient_context) { return "yetersiz bağlam"; }
+  var s = String(l.primary_mode);
+  if (l.secondary_modes && l.secondary_modes.length) {
+    s += " (+ " + l.secondary_modes.join(", ") + ")";
+  }
+  if (l.confidence) { s += " | güven: " + l.confidence; }
+  return s;
+}
+function card(host, who, label) {
+  var box = document.createElement("div");
+  box.className = "card";
+  var w = document.createElement("div"); w.className = "who"; txt(w, who);
+  var l = document.createElement("div"); l.className = "lab"; txt(l, describe(label));
+  var r = document.createElement("div"); r.className = "why"; txt(r, label.rationale || "");
+  box.appendChild(w); box.appendChild(l); box.appendChild(r);
+  host.appendChild(box);
+}
+
+function renderStatic() {
+  txt($("fp"), "dataset " + P.dataset_fingerprint.slice(0, 12) +
+               " | paket " + P.package_id.slice(0, 12) + " | v" + P.app_version);
+  var tax = $("tax"), codes = Object.keys(P.taxonomy).sort();
+  for (var i = 0; i < codes.length; i++) {
+    var d = document.createElement("div");
+    txt(d, codes[i] + ": " + P.taxonomy[codes[i]]);
+    tax.appendChild(d);
+  }
+  var an = $("anchors");
+  for (var lvl in P.confidence_anchors) {
+    var e = document.createElement("div");
+    txt(e, lvl + ": " + P.confidence_anchors[lvl]);
+    an.appendChild(e);
+  }
+  fillSelect($("confidence"), P.confidence_levels, true);
+}
+
+function render() {
+  var rec = RECORDS[idx], s = cur(), ev = rec.evidence;
+  txt($("counter"), (idx + 1) + " / " + RECORDS.length);
+  txt($("taskid"), "kayıt " + rec.record_id.slice(0, 10) + " | görev " + ev.task_id +
+                   " | giriş " + (ev.entry_point || "?"));
+  var pill = $("interaction");
+  txt(pill, rec.interaction_type === "single_agent" ? "tek ajan" : "çok ajanlı");
+  pill.className = "pill " + (rec.interaction_type === "single_agent" ? "single" : "multi");
+
+  txt($("prompt"), ev.task_prompt);
+  txt($("plan"), ev.plan || "(yok)");
+  var msgs = "";
+  for (var i = 0; i < ev.messages.length; i++) {
+    var m = ev.messages[i];
+    msgs += "[" + m.from + " -> " + (m.to || "?") + "]\n" + m.content + "\n\n";
+  }
+  txt($("messages"), msgs || "(yok)");
+  txt($("code"), ev.code);
+  txt($("status"), "base=" + ev.base_status + " | plus=" + ev.plus_status +
+                   " | error_class=" + (ev.error_class || "-"));
+  txt($("traceback"), ev.traceback || "(yok)");
+
+  var blind = $("blind"); clear(blind);
+  for (var b = 0; b < rec.blind_labels.length; b++) {
+    card(blind, "İnsan " + rec.blind_labels[b].annotator_id, rec.blind_labels[b]);
+  }
+
+  txt($("ai-agreement"), "Dış judge kararı: " + rec.external_agreement_level +
+      (rec.external_consensus_label ?
+       " | dış konsensüs: " + rec.external_consensus_label : ""));
+  var host = $("ai-judges"); clear(host);
+  for (var j = 0; j < rec.external_ai_judges.length; j++) {
+    card(host, "External Annotator " + rec.external_ai_judges[j].label,
+         rec.external_ai_judges[j]);
+  }
+  var adjHost = $("ai-adj"); clear(adjHost);
+  if (rec.grok_adjudication) {
+    card(adjHost, "External split adjudicator", rec.grok_adjudication);
+  }
+
+  fillSelect($("primary"), allowedModes(rec).concat(["none"]).sort(), true);
+  fillSelect($("secondary"), allowedModes(rec), false);
+  $("primary").value = s.primary_mode;
+  $("confidence").value = s.confidence;
+  $("rationale").value = s.rationale;
+  $("insufficient").checked = s.insufficient_context;
+  var sec = $("secondary");
+  for (var k = 0; k < sec.options.length; k++) {
+    sec.options[k].selected = s.secondary_modes.indexOf(sec.options[k].value) >= 0;
+  }
+  applyRules();
+
+  $("bar").max = RECORDS.length;
+  $("bar").value = doneCount();
+  txt($("recstate"), complete(rec, s) ? "tamam" : "eksik");
+  $("recstate").className = "meta " + (complete(rec, s) ? "ok" : "");
+  txt($("saved"), doneCount() + " / " + RECORDS.length + " tamamlandı");
+  txt($("anchor"), s.confidence ? (P.confidence_anchors[s.confidence] || "") : "");
+  $("prev").disabled = idx === 0;
+  $("next").disabled = idx === RECORDS.length - 1;
+}
+
+function applyRules() {
+  var s = cur(), yetersiz = $("insufficient").checked;
+  $("primary").disabled = yetersiz;
+  $("secondary").disabled = yetersiz || $("primary").value === "none";
+  if (yetersiz) {
+    $("primary").value = "";
+    var sec = $("secondary");
+    for (var i = 0; i < sec.options.length; i++) { sec.options[i].selected = false; }
+  }
+  var err = "";
+  if (!yetersiz && !s.primary_mode) { err = "primary_mode zorunlu."; }
+  else if (s.rationale.trim().length === 0) { err = "nihai gerekçe zorunlu."; }
+  else if (!s.confidence) {
+    err = yetersiz ? "confidence yetersiz bağlamda da zorunlu (ör. low)."
+                   : "confidence zorunlu.";
+  }
+  txt($("err"), err);
+}
+
+function collect() {
+  var s = cur();
+  s.insufficient_context = $("insufficient").checked;
+  s.rationale = $("rationale").value;
+  s.confidence = $("confidence").value;
+  if (s.insufficient_context) {
+    s.primary_mode = ""; s.secondary_modes = [];
+  } else {
+    s.primary_mode = $("primary").value;
+    var sec = $("secondary"), out = [];
+    for (var i = 0; i < sec.options.length; i++) {
+      if (sec.options[i].selected) { out.push(sec.options[i].value); }
+    }
+    if (s.primary_mode === "none") { out = []; }
+    s.secondary_modes = out;
+  }
+  save(); render();
+}
+
+function envelope() {
+  var out = [];
+  for (var i = 0; i < RECORDS.length; i++) {
+    var s = state[RECORDS[i].record_id] || blank();
+    out.push({
+      record_id: RECORDS[i].record_id,
+      human_adjudicated_label: {
+        primary_mode: s.insufficient_context ? null : (s.primary_mode || null),
+        secondary_modes: s.insufficient_context ? [] : s.secondary_modes.slice(),
+        confidence: s.confidence,
+        rationale: s.rationale.trim(),
+        insufficient_context: !!s.insufficient_context
+      }
+    });
+  }
+  // Kör kararlar BİLİNÇLİ olarak taşınmaz: export'ta bir kopyaları bulunsaydı
+  // "hangisi geçerli" belirsizliği doğar ve değiştirilmelerine kapı açılırdı.
+  return {
+    human_schema_version: P.human_schema_version,
+    app_version: P.app_version,
+    dataset_fingerprint: P.dataset_fingerprint,
+    package_id: P.package_id,
+    phase: P.phase,
+    blind_lock_sha256: P.blind_lock_sha256,
+    labels: out
+  };
+}
+
+function download(name, obj) {
+  var blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+$("export-backup").addEventListener("click", function () {
+  download("BACKUP_adjudication_" + P.dataset_fingerprint.slice(0, 8) + ".json", envelope());
+});
+$("export-final").addEventListener("click", function () {
+  var n = doneCount();
+  if (n < RECORDS.length) {
+    txt($("err"), "tur tamamlanmadı: " + (RECORDS.length - n) +
+                  " kayıt eksik. Nihai dosya indirilmedi (yedek alabilirsiniz).");
+    return;
+  }
+  download("mast_human_adjudication_" + P.dataset_fingerprint.slice(0, 8) + ".json",
+           envelope());
+});
+$("import").addEventListener("click", function () { $("file").click(); });
+$("file").addEventListener("change", function (ev) {
+  var f = ev.target.files[0];
+  if (!f) { return; }
+  var r = new FileReader();
+  r.onload = function () {
+    try {
+      var data = JSON.parse(r.result);
+      if (data.dataset_fingerprint !== P.dataset_fingerprint ||
+          data.package_id !== P.package_id || data.phase !== P.phase) {
+        txt($("err"), "bu dosya bu pakete ait değil.");
+        return;
+      }
+      var known = {};
+      for (var i = 0; i < RECORDS.length; i++) { known[RECORDS[i].record_id] = true; }
+      for (var j = 0; j < data.labels.length; j++) {
+        var L = data.labels[j];
+        if (!known[L.record_id] || !L.human_adjudicated_label) { continue; }
+        var h = L.human_adjudicated_label;
+        state[L.record_id] = {
+          primary_mode: h.primary_mode || "",
+          secondary_modes: (h.secondary_modes || []).slice(),
+          confidence: h.confidence || "",
+          rationale: h.rationale || "",
+          insufficient_context: !!h.insufficient_context
+        };
+      }
+      save(); render(); txt($("err"), "");
+    } catch (e) { txt($("err"), "JSON okunamadı."); }
+  };
+  r.readAsText(f);
+  ev.target.value = "";
+});
+
+$("prev").addEventListener("click", function () { if (idx > 0) { idx--; render(); } });
+$("next").addEventListener("click", function () {
+  if (idx < RECORDS.length - 1) { idx++; render(); }
+});
+$("jump").addEventListener("click", function () {
+  for (var i = 0; i < RECORDS.length; i++) {
+    var s = state[RECORDS[i].record_id];
+    if (!s || !complete(RECORDS[i], s)) { idx = i; render(); return; }
+  }
+  txt($("err"), "bütün kayıtlar tamamlandı.");
+});
+$("clear").addEventListener("click", function () {
+  state[RECORDS[idx].record_id] = blank(); save(); render();
+});
+
+var inputs = ["primary", "secondary", "confidence", "rationale", "insufficient"];
+for (var k = 0; k < inputs.length; k++) { $(inputs[k]).addEventListener("change", collect); }
+$("rationale").addEventListener("input", collect);
+
+document.addEventListener("keydown", function (e) {
+  if (!e.altKey) { return; }
+  if (e.key === "ArrowLeft") { $("prev").click(); }
+  else if (e.key === "ArrowRight") { $("next").click(); }
+  else if (e.key === "u" || e.key === "U") { $("jump").click(); }
+  else if (e.key === "s" || e.key === "S") { e.preventDefault(); $("export-backup").click(); }
+});
+
+restore();
+renderStatic();
+render();
+</script>
+</body>
+</html>
