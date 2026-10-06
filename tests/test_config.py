@@ -224,13 +224,63 @@ def test_deepseek_minimax_rotasina_zorlanmaz():
     # bırakılsaydı DeepSeek'in BÜTÜN çağrıları MiniMax rotasına giderdi.
     deepseek = config.provider_routing_for(config.MODEL_SECONDARY)
     assert deepseek.get("order") != ["minimax"]
-    assert deepseek is config.OPENROUTER_PROVIDER_ROUTING
+    # `is` DEĞİL `==`: `provider_routing_for` DERİN KOPYA döner (mutasyon
+    # güvenliği). Sınanan şey "bu model için model-özgü istisna YOK" olgusudur.
+    assert deepseek == config.OPENROUTER_PROVIDER_ROUTING
+    assert config.MODEL_SECONDARY not in config.MODEL_PROVIDER_ROUTING
 
 
 def test_uretici_ve_adjudicator_rotalari_varsayilan():
     # Gemini/DeepSeek/Grok için exact provider veya order TAHMİN EDİLMEZ.
     for model in (config.MODEL_MAIN, config.MODEL_SECONDARY, config.MODEL_ADJUDICATOR):
-        assert config.provider_routing_for(model) is config.OPENROUTER_PROVIDER_ROUTING
+        assert config.provider_routing_for(model) == config.OPENROUTER_PROVIDER_ROUTING
+        assert model not in config.MODEL_PROVIDER_ROUTING
+
+
+def test_routing_sozlugu_mutasyona_karsi_guvenli():
+    """Çağıran taraf global politikayı DEĞİŞTİREMEZ."""
+    for model in (config.MODEL_MAIN, config.MODEL_JUDGE_EXTERNAL,
+                  config.MODEL_FOLLOWUP_SECONDARY):
+        once = config.provider_routing_for(model)
+        once["allow_fallbacks"] = "KURCALANDI"
+        once.setdefault("order", []).append("kurcalanan-saglayici")
+        sonra = config.provider_routing_for(model)
+        assert sonra["allow_fallbacks"] != "KURCALANDI"
+        assert "kurcalanan-saglayici" not in (sonra.get("order") or [])
+    assert config.OPENROUTER_PROVIDER_ROUTING == {"require_parameters": True,
+                                                  "allow_fallbacks": True}
+
+
+def test_luna_rotasi_openai_standard_only():
+    r = config.provider_routing_for(config.MODEL_FOLLOWUP_SECONDARY)
+    assert r["require_parameters"] is True
+    assert r["allow_fallbacks"] is False
+    assert r["order"] == ["openai"] and r["only"] == ["openai"]
+    # `only` tek başına yetmez: base slug varyantları kapsayabiliyor.
+    assert set(r["ignore"]) >= {"openai/flex", "openai/priority"}
+
+
+def test_study1a_modellerinin_rotasi_degismedi():
+    """Luna istisnası Study 1A kadrosunun rotasına DOKUNMAZ."""
+    for model in (config.MODEL_MAIN, config.MODEL_SECONDARY):
+        assert config.provider_routing_for(model) == {"require_parameters": True,
+                                                      "allow_fallbacks": True}
+    assert config.provider_routing_for(config.MODEL_JUDGE_EXTERNAL)["order"] \
+        == ["minimax"]
+
+
+def test_luna_study1a_verisi_uretemez():
+    assert config.MODEL_FOLLOWUP_SECONDARY in config.PRODUCER_ROLE_BINDINGS.values()
+    assert config.MODEL_FOLLOWUP_SECONDARY not in config.MODEL_PRODUCERS
+    with pytest.raises(ValueError):
+        config.validate_model_for_task_set(config.MODEL_FOLLOWUP_SECONDARY, "heldout")
+
+
+def test_luna_temperature_istisnasi_tek_merkezde():
+    assert config.omitted_request_parameters(config.MODEL_FOLLOWUP_SECONDARY) \
+        == ("temperature",)
+    assert config.request_temperature_kwargs(config.MODEL_FOLLOWUP_SECONDARY) == {}
+    assert config.request_temperature_kwargs(config.MODEL_MAIN) == {"temperature": 0.2}
 
 
 def test_sema_surumleri_tanimli():
@@ -259,14 +309,15 @@ def test_panel_hash_surumu_karar_kuralindan_ayri():
 
 def test_sema_surumleri_bagimsiz_artiyor():
     # Her sürüm AYRI bir tüketici sözleşmesidir ve bağımsız artar: MAST 3.2,
-    # insan 2.0, çağrı 2.1 (provenance alanları), analiz 2.2 (2.1'de uzun-kuyruk
-    # alanları n/p95/observed_max, 2.2'de RQ5 `base_plus_attrition` bloğu).
+    # insan 2.0, çağrı 2.1 (provenance alanları), analiz 2.3 (2.1'de uzun-kuyruk
+    # alanları n/p95/observed_max, 2.2'de RQ5 `base_plus_attrition` bloğu,
+    # 2.3'te keşifsel `retry_outcome` bloğu).
     # SONUÇ şeması bunların hiçbirinde değişmedi — 2.0'da kaldı, çünkü koşu
     # kaydının alanları aynı.
     assert config.RESULT_SCHEMA_VERSION == "2.0"
     assert config.LLM_CALL_SCHEMA_VERSION == "2.1"
     assert config.SELF_CONSISTENCY_SCHEMA_VERSION == "1.0"
-    assert config.ANALYSIS_SCHEMA_VERSION == "2.2"
+    assert config.ANALYSIS_SCHEMA_VERSION == "2.3"
     # RQ5/MAST dağılımı AYRI tüketici modülleridir ve kendi sürümlerini taşır:
     # ana analiz sözleşmesi değişmeden bunlar değişebilir (ve tersi).
     assert config.RQ5_SCHEMA_VERSION == "1.0"

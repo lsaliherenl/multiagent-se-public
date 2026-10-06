@@ -3,7 +3,11 @@
 Deney parametreleri tek yerden yönetilir; agent/pipeline kodu sabit değer içermez.
 """
 
+import hashlib
+import json
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from dotenv import load_dotenv
 
@@ -11,13 +15,28 @@ ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
 
 # --- Görev setleri (EXPERIMENT_PROTOCOL.md §5) ---
-# İKİ SET AYRI DİZİNDE, bilinçli: pilot görevlerin ana istatistiğe sızması
-# (ya da tersi) tek bir yanlış load_all_tasks() çağrısıyla olabilirdi.
+# HER SET AYRI DİZİNDE, bilinçli: development görevlerinin ana istatistiğe
+# sızması (ya da tersi) tek bir yanlış load_all_tasks() çağrısıyla olabilirdi.
 TASKS_DIR = ROOT / "tasks"                  # development/pilot seti (20 görev)
-HELDOUT_TASKS_DIR = ROOT / "tasks_heldout"  # ana deney seti (50 EvalPlus görevi)
+HELDOUT_TASKS_DIR = ROOT / "tasks_heldout"  # Study 1A/1B held-out (50 EvalPlus görevi)
 PILOT_TASK_SET = "pilot"
 HELDOUT_TASK_SET = "heldout"
-TASK_SETS = {PILOT_TASK_SET: TASKS_DIR, HELDOUT_TASK_SET: HELDOUT_TASKS_DIR}
+# Study 2 (EXPERIMENT_PROTOCOL.md §13): BigCodeBench-Hard görevleri. Seçim
+# özel çalışma alanında yapıldı ve donduruldu; dosyalar burada olduğu gibi
+# dağıtılır, yeniden seçilmez.
+FOLLOWUP_DEV_TASKS_DIR = ROOT / "tasks_followup_dev"      # Study 2 development (16)
+STUDY2_COMPLEX_TASKS_DIR = ROOT / "tasks_study2_complex"  # Study 2 held-out (50)
+FOLLOWUP_DEV_TASK_SET = "followup_dev"
+STUDY2_COMPLEX_TASK_SET = "study2_complex"
+TASK_SETS = {
+    PILOT_TASK_SET: TASKS_DIR,
+    HELDOUT_TASK_SET: HELDOUT_TASKS_DIR,
+    FOLLOWUP_DEV_TASK_SET: FOLLOWUP_DEV_TASKS_DIR,
+    STUDY2_COMPLEX_TASK_SET: STUDY2_COMPLEX_TASKS_DIR,
+}
+# Study 1A hattının (runner legacy biçimi, self-consistency) tanıdığı setler.
+# Study 2 setlerine yalnız açık `--study` kimliğiyle erişilir.
+STUDY1A_TASK_SETS = (PILOT_TASK_SET, HELDOUT_TASK_SET)
 
 # Held-out seçim parametreleri — seçim yapıldıktan sonra DEĞİŞTİRİLEMEZ
 # (değişirse farklı bir görev seti demektir; seçim manifesti bunu korur).
@@ -55,6 +74,18 @@ MODEL_SECONDARY = "openrouter/deepseek/deepseek-v4-flash"
 # diye (ayrı bir pilot modeli, pilotta görülmeyen bir rota sorununu ana koşuya
 # taşırdı). Held-out görev seti yine yalnız --task-set heldout ile açılır.
 MODEL_PILOT = MODEL_SECONDARY
+
+# Takip çalışmalarının (Study 1B/2) ikinci üreticisi (EXPERIMENT_PROTOCOL.md §13).
+# ÜÇ KİMLİK AYRI TUTULUR ve birbirinin yerine geçmez:
+#   1. requested / LiteLLM slug    — isteğe konan değer
+#   2. expected canonical snapshot — public metadata'nın bildirdiği tarihli kimlik
+#   3. observed actual model       — sağlayıcının canlı uyumluluk smoke'unda
+#                                    DÖNDÜRDÜĞÜ ad (tarihsiz alias)
+# (3) tarihsiz olduğu için (2) "runtime tarafından doğrulandı" diye sunulamaz.
+MODEL_FOLLOWUP_SECONDARY_CANDIDATE = "openrouter/openai/gpt-5.6-luna"
+MODEL_FOLLOWUP_SECONDARY_EXPECTED_CANONICAL = "openai/gpt-5.6-luna-20260709"
+MODEL_FOLLOWUP_SECONDARY_OBSERVED_ACTUAL = "openai/gpt-5.6-luna"
+MODEL_FOLLOWUP_SECONDARY = MODEL_FOLLOWUP_SECONDARY_CANDIDATE
 
 # Held-out veri ÜRETMESİNE izin verilen tam liste (§4). Judge/adjudicator
 # modelleri buraya GİREMEZ: MiniMax "held-out kod üretmez" kuralı, MAST
@@ -114,6 +145,13 @@ def validate_model_roles() -> None:
         raise ValueError("MODEL_PRODUCERS, MODEL_MAIN + MODEL_SECONDARY ile birebir eşleşmeli")
     if MODEL_JUDGE_EXTERNAL in MODEL_PRODUCERS or MODEL_ADJUDICATOR in MODEL_PRODUCERS:
         raise ValueError("judge/adjudicator modelleri held-out veri ÜRETEMEZ (§4, §9.2)")
+    # Takip rolü Study 1A kadrosuyla ve judge/adjudicator'la ÇAKIŞAMAZ: Luna'nın
+    # DeepSeek'in slug'ına eşitlenmesi Study 1B'yi Study 1A'nın tekrarı yapardı.
+    if MODEL_FOLLOWUP_SECONDARY in (MODEL_MAIN, MODEL_SECONDARY):
+        raise ValueError("MODEL_FOLLOWUP_SECONDARY Study 1A üretici kadrosundan "
+                         "farklı olmalı (§13)")
+    if MODEL_FOLLOWUP_SECONDARY in MODEL_JUDGES or MODEL_FOLLOWUP_SECONDARY == MODEL_ADJUDICATOR:
+        raise ValueError("MODEL_FOLLOWUP_SECONDARY judge/adjudicator olamaz (§4, §9.2)")
 
 
 validate_model_roles()
@@ -151,28 +189,277 @@ def model_alias_help() -> str:
     return f"takma ad ({'|'.join(MODEL_ALIASES)}) veya tam LiteLLM slug'ı"
 
 
-def validate_model_for_task_set(model: str, task_set: str) -> str:
-    """Modeli çözer ve görev setine göre kapıdan geçirir; çözülmüş slug'ı döner.
+# --- Deney profilleri (EXPERIMENT_PROTOCOL.md §13) ---------------------------
+#
+# Study 1A tek bir üretici kadrosu (MODEL_MAIN + MODEL_SECONDARY) ve iki görev
+# seti varsayar. Takip çalışmaları AYNI runner'ı farklı kadro ve rejimle
+# kullanır; Luna'yı MODEL_SECONDARY'nin üstüne yazmak Study 1A'nın anlamını
+# bozardı. Bunun yerine çalışma zamanında değiştirilemez bir profil katmanı
+# vardır. Study 3 ertelendi ve bu dağıtımda profili yoktur.
 
-    Held-out sette YALNIZ `MODEL_PRODUCERS` kabul edilir. Alias katmanı tek
-    başına yeterli DEĞİL: `--model openrouter/minimax/minimax-m3` yazmak alias
-    tablosunu tamamen atlar ve "MiniMax held-out kod üretmez" iddiasını sessizce
-    çürütürdü (§4). Karar ÇÖZÜLMÜŞ slug üzerinden verilir — `dev` de DeepSeek'e
-    çözüldüğü için held-out'ta teknik olarak geçerlidir; kapı adı değil kimliği
-    denetler.
+PROFILE_SCHEMA_VERSION = "1.0"
 
-    Pilot/development sette kısıt YOKTUR: tek seferlik uyumluluk smoke'ları
-    tanımsız bir slug'la da yapılabilmelidir.
+STUDY1A = "study1a"
+STUDY1B = "study1b"
+STUDY2 = "study2"
+
+# `--study` ile AÇIKÇA istenmesi zorunlu olan çalışmalar. Study 1A bilinçli
+# olarak YOK: legacy biçim (`--task-set heldout --model main`) onun tek
+# kanonik ifadesidir.
+FOLLOWUP_STUDY_IDS = (STUDY1B, STUDY2)
+
+ROLE_MAIN = "main"
+ROLE_SECONDARY = "secondary"
+ROLE_FOLLOWUP_SECONDARY = "followup_secondary"
+
+PRODUCER_ROLE_BINDINGS = MappingProxyType({
+    ROLE_MAIN: MODEL_MAIN,
+    ROLE_SECONDARY: MODEL_SECONDARY,
+    ROLE_FOLLOWUP_SECONDARY: MODEL_FOLLOWUP_SECONDARY,
+})
+
+
+@dataclass(frozen=True)
+class ExperimentProfile:
+    """Bir çalışmanın görev rejimi + üretici kadrosu. Çalışma zamanında değişmez.
+
+    `task_set` held-out/birincil rejimdir; `dev_task_set` yalnız teknik
+    entegrasyon/kalibrasyon içindir ve ana istatistiğe girmez.
     """
-    resolved = resolve_model(model)
-    if task_set == HELDOUT_TASK_SET and resolved not in MODEL_PRODUCERS:
+
+    study_id: str
+    task_set: str
+    task_regime: str
+    dev_task_set: str | None
+    dev_task_regime: str | None
+    producer_roles: tuple[str, ...]
+    protocol_version: str
+
+    def task_sets(self) -> tuple[str, ...]:
+        return tuple(s for s in (self.task_set, self.dev_task_set) if s)
+
+    def regime_for(self, task_set: str) -> str:
+        if task_set == self.task_set:
+            return self.task_regime
+        if task_set == self.dev_task_set:
+            return self.dev_task_regime
+        raise ValueError(f"{self.study_id!r} profili {task_set!r} setini tanımaz")
+
+
+EXPERIMENT_PROFILES = MappingProxyType({
+    STUDY1A: ExperimentProfile(
+        study_id=STUDY1A,
+        task_set=HELDOUT_TASK_SET,
+        task_regime="evalplus_heldout",
+        dev_task_set=PILOT_TASK_SET,
+        dev_task_regime="pilot_dev",
+        producer_roles=(ROLE_MAIN, ROLE_SECONDARY),
+        protocol_version="study1a-frozen",
+    ),
+    # Study 1B AYNI 50 held-out görevi kullanır — ayrımı yapan şey görev seti
+    # değil study_id + protokol sürümüdür (manifestin kritik alanları).
+    STUDY1B: ExperimentProfile(
+        study_id=STUDY1B,
+        task_set=HELDOUT_TASK_SET,
+        task_regime="evalplus_heldout",
+        dev_task_set=PILOT_TASK_SET,
+        dev_task_regime="pilot_dev",
+        producer_roles=(ROLE_MAIN, ROLE_FOLLOWUP_SECONDARY),
+        protocol_version="followup-v1",
+    ),
+    STUDY2: ExperimentProfile(
+        study_id=STUDY2,
+        task_set=STUDY2_COMPLEX_TASK_SET,
+        task_regime="complex_function",
+        dev_task_set=FOLLOWUP_DEV_TASK_SET,
+        dev_task_regime="complex_function_dev",
+        producer_roles=(ROLE_MAIN, ROLE_FOLLOWUP_SECONDARY),
+        protocol_version="followup-v1",
+    ),
+})
+
+# Bir görev setini AÇIK profil kimliği olmadan kullanmak yasaktır.
+FOLLOWUP_ONLY_TASK_SETS = tuple(sorted(
+    {s for p in EXPERIMENT_PROFILES.values() for s in p.task_sets()}
+    - set(STUDY1A_TASK_SETS)
+))
+
+
+def validate_profile_registry() -> None:
+    """Profil invariantlarını içe aktarma sırasında doğrular (assert değil)."""
+    for study_id, profile in EXPERIMENT_PROFILES.items():
+        if profile.study_id != study_id:
+            raise ValueError(f"profil anahtarı ile study_id ayrışıyor: {study_id!r}")
+        for task_set in profile.task_sets():
+            if task_set not in TASK_SETS:
+                raise ValueError(f"{study_id!r} tanımsız görev setine bağlı: {task_set!r}")
+        if bool(profile.dev_task_set) != bool(profile.dev_task_regime):
+            raise ValueError(f"{study_id!r}: dev görev seti ve rejimi birlikte tanımlanmalı")
+        for role in profile.producer_roles:
+            if role not in PRODUCER_ROLE_BINDINGS:
+                raise ValueError(f"{study_id!r} tanımsız üretici rolüne bağlı: {role!r}")
+    if EXPERIMENT_PROFILES[STUDY1A].producer_roles != (ROLE_MAIN, ROLE_SECONDARY):
+        raise ValueError("Study 1A kadrosu main + secondary olarak dondurulmuştur")
+    for study_id in FOLLOWUP_STUDY_IDS:
+        if ROLE_SECONDARY in EXPERIMENT_PROFILES[study_id].producer_roles:
+            raise ValueError(f"{study_id!r} Study 1A ikinci üreticisini kullanamaz")
+    forbidden = {MODEL_JUDGE_EXTERNAL, MODEL_ADJUDICATOR}
+    for role, slug in PRODUCER_ROLE_BINDINGS.items():
+        if slug in forbidden:
+            raise ValueError(f"{role!r} judge/adjudicator modeline bağlanamaz")
+
+
+validate_profile_registry()
+
+
+def producer_model_for_role(role: str) -> str:
+    if role not in PRODUCER_ROLE_BINDINGS:
         raise ValueError(
-            f"held-out görev setinde yalnız üretici modeller çalıştırılabilir: "
-            f"{list(MODEL_PRODUCERS)}. Verilen: {model!r} -> {resolved!r}. "
-            f"Judge/adjudicator modelleri ve tanımsız slug'lar held-out veri üretemez "
-            f"(EXPERIMENT_PROTOCOL.md §4)."
-        )
-    return resolved
+            f"tanımsız üretici rolü: {role!r} (roller: {list(PRODUCER_ROLE_BINDINGS)})")
+    return PRODUCER_ROLE_BINDINGS[role]
+
+
+def role_for_model(resolved_model: str) -> str | None:
+    for role, slug in PRODUCER_ROLE_BINDINGS.items():
+        if slug == resolved_model:
+            return role
+    return None
+
+
+def resolve_producer_input(name: str) -> str:
+    """CLI model girdisini çözer: rol adı > takma ad > tam slug."""
+    if name in PRODUCER_ROLE_BINDINGS:
+        return producer_model_for_role(name)
+    return resolve_model(name)
+
+
+def profile_fingerprint(study_id: str) -> str:
+    """Profil tanımının + YALNIZ kendi rol binding'lerinin hash'i."""
+    profile = EXPERIMENT_PROFILES[study_id]
+    payload = {
+        "schema_version": PROFILE_SCHEMA_VERSION,
+        "study_id": profile.study_id,
+        "task_set": profile.task_set,
+        "task_regime": profile.task_regime,
+        "dev_task_set": profile.dev_task_set,
+        "dev_task_regime": profile.dev_task_regime,
+        "protocol_version": profile.protocol_version,
+        "producer_roles": list(profile.producer_roles),
+        "role_bindings": {r: PRODUCER_ROLE_BINDINGS[r] for r in profile.producer_roles},
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True)
+class RunIdentity:
+    """Bir koşunun çözülmüş kimliği — manifest/resume alanlarının tek kaynağı."""
+
+    study_id: str
+    protocol_version: str
+    task_regime: str
+    task_set: str
+    model: str
+    model_requested: str
+    producer_role: str | None
+    profile_fingerprint: str
+    explicit_study: bool
+
+    @property
+    def is_followup(self) -> bool:
+        return self.study_id in FOLLOWUP_STUDY_IDS
+
+    def manifest_fields(self) -> dict:
+        return {
+            "study_id": self.study_id,
+            "protocol_version": self.protocol_version,
+            "task_regime": self.task_regime,
+            "profile_fingerprint": self.profile_fingerprint,
+        }
+
+
+def validate_run_identity(*, task_set: str, model: str, study: str | None = None) -> RunIdentity:
+    """Study + görev seti + model üçlüsünü BİRLİKTE doğrular (üretici kapısı).
+
+    * `study` yoksa legacy Study 1A anlamı geçerlidir; yalnız `pilot|heldout`
+      açılır. Study 2 setleri açık kimlik olmadan başlayamaz.
+    * `study` varsa görev seti o profilin held-out veya dev setinden biri olmalı.
+    * Model, profilin üretici rollerinden birine çözülmelidir; judge/adjudicator
+      ve tanımsız slug'lar yapısal olarak elenir.
+    * Legacy pilot yolunda kısıt YOKTUR (uyumluluk smoke'ları için).
+    """
+    if task_set not in TASK_SETS:
+        raise ValueError(
+            f"bilinmeyen görev seti: {task_set!r} (seçenekler: {sorted(TASK_SETS)})")
+    if study is None:
+        if task_set in FOLLOWUP_ONLY_TASK_SETS:
+            raise ValueError(
+                f"{task_set!r} görev seti açık çalışma kimliği olmadan koşulamaz: "
+                f"--study {'|'.join(FOLLOWUP_STUDY_IDS)} ver.")
+        profile = EXPERIMENT_PROFILES[STUDY1A]
+        explicit = False
+    else:
+        if study not in EXPERIMENT_PROFILES:
+            raise ValueError(
+                f"tanımsız çalışma: {study!r} (seçenekler: {sorted(EXPERIMENT_PROFILES)})")
+        if study == STUDY1A:
+            raise ValueError(
+                "Study 1A açık --study ile ifade edilmez; legacy biçimi kullan "
+                "(--task-set heldout --model main|secondary).")
+        profile = EXPERIMENT_PROFILES[study]
+        explicit = True
+        if task_set not in profile.task_sets():
+            raise ValueError(
+                f"{study!r} profili {task_set!r} görev setini kullanmaz "
+                f"(izinli: {list(profile.task_sets())}).")
+
+    resolved = resolve_producer_input(model)
+    role = role_for_model(resolved)
+    unrestricted_legacy_pilot = (not explicit) and task_set == PILOT_TASK_SET
+    if not unrestricted_legacy_pilot and role not in profile.producer_roles:
+        allowed = {r: PRODUCER_ROLE_BINDINGS[r] for r in profile.producer_roles}
+        raise ValueError(
+            f"{profile.study_id!r} / {task_set!r} üretici kapısı: yalnız {allowed} "
+            f"çalıştırılabilir. Verilen: {model!r} -> {resolved!r}. Judge/"
+            f"adjudicator modelleri, başka bir çalışmanın üreticisi ve tanımsız "
+            f"slug'lar held-out veri üretemez (EXPERIMENT_PROTOCOL.md §4, §13).")
+
+    return RunIdentity(
+        study_id=profile.study_id,
+        protocol_version=profile.protocol_version,
+        task_regime=profile.regime_for(task_set),
+        task_set=task_set,
+        model=resolved,
+        model_requested=model,
+        producer_role=role,
+        profile_fingerprint=profile_fingerprint(profile.study_id),
+        explicit_study=explicit,
+    )
+
+
+def require_dispatchable_model(model: str) -> str:
+    """Sağlayıcıya gönderilmeden hemen önceki son kapı (agents/llm.py).
+
+    None, boş string veya çözülmemiş bir rol adı litellm'e ulaşamaz ve
+    varsayılan bir modele DÜŞMEZ.
+    """
+    if model is None or not isinstance(model, str) or not model.strip():
+        raise ValueError(f"çözülmemiş/boş model dispatch edilemez: {model!r}")
+    if model in PRODUCER_ROLE_BINDINGS:
+        raise ValueError(
+            f"{model!r} bir üretici ROLÜ, model slug'ı değil; dispatch öncesi "
+            f"config.producer_model_for_role() ile çözülmeli.")
+    return model
+
+
+def validate_model_for_task_set(model: str, task_set: str) -> str:
+    """Legacy Study 1A kapısı — `validate_run_identity`'nin ince sarmalayıcısı.
+
+    Held-out sette yalnız Study 1A üreticileri kabul edilir; pilot sette kısıt
+    yoktur (EXPERIMENT_PROTOCOL.md §4).
+    """
+    return validate_run_identity(task_set=task_set, model=model, study=None).model
 
 # --- Sandbox ---
 SANDBOX_TIMEOUT_S = 10
@@ -333,15 +620,103 @@ OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "allow_fallbacks": Tr
 # Gemini, DeepSeek ve Grok için exact provider/order TAHMİN EDİLMEZ: varsayılan
 # politika (require_parameters + fallback) geçerlidir, gerçekleşen sağlayıcı
 # zaten her çağrıda loglanır.
+#
+# Luna (Study 1B/2): TEK izin verilen endpoint OpenAI Standard. Karar performansa
+# BAKILMADAN verildi; amaç bütün Luna kollarında serving yığınını sabitlemektir.
+# Bedeli fallback dayanıklılığından vazgeçmektir. `only`/`order` tek başına
+# yetmez: base slug `openai` kendi varyantlarını (flex/priority) da
+# kapsayabildiği için onlar ayrıca `ignore` listesindedir.
+FOLLOWUP_LUNA_PROVIDER_ROUTING = {
+    "require_parameters": True,
+    "order": ["openai"],
+    "only": ["openai"],
+    "ignore": ["openai/flex", "openai/priority"],
+    "allow_fallbacks": False,
+}
+FOLLOWUP_LUNA_SLUGS = (MODEL_FOLLOWUP_SECONDARY,)
+
 MODEL_PROVIDER_ROUTING = {
     MODEL_JUDGE_EXTERNAL: {"require_parameters": True, "allow_fallbacks": False,
                            "order": ["minimax"]},
+    **{slug: FOLLOWUP_LUNA_PROVIDER_ROUTING for slug in FOLLOWUP_LUNA_SLUGS},
 }
 
 
 def provider_routing_for(model: str) -> dict | None:
-    """Modele özgü routing politikası; istisna yoksa varsayılan."""
-    return MODEL_PROVIDER_ROUTING.get(model, OPENROUTER_PROVIDER_ROUTING)
+    """Modele özgü routing politikası; istisna yoksa varsayılan.
+
+    DERİN KOPYA döner: çağıran taraf global config sözlüğünü mutasyona
+    uğratamaz.
+    """
+    politika = MODEL_PROVIDER_ROUTING.get(model, OPENROUTER_PROVIDER_ROUTING)
+    return json.loads(json.dumps(politika))
+
+
+# --- Etkili istek politikası (EXPERIMENT_PROTOCOL.md §13) ---------------------
+# İSTENEN parametre ile sağlayıcıya FİİLEN İLETİLEN parametre ayrı kavramlardır.
+# GPT-5.6 Luna'nın hiçbir endpoint'i `temperature` desteklemiyor; rota
+# `require_parameters: true` ile kilitli olduğu için parametre Luna
+# isteklerinden TAMAMEN çıkarılır. `temperature=None` gönderilmez: anahtarın
+# hiç bulunmaması tek doğru davranıştır. Kural burada tek merkezdedir;
+# agents/llm.py slug karşılaştırması yapmaz.
+REQUEST_POLICY_VERSION = "1.0"
+TEMPERATURE_POLICY_EXPLICIT = "explicit"
+TEMPERATURE_POLICY_OMITTED = "omitted_unsupported_by_selected_endpoint"
+BASE_REQUIRED_REQUEST_PARAMETERS = ("temperature", "max_tokens", "reasoning",
+                                    "response_format")
+MODEL_OMITTED_REQUEST_PARAMETERS = {
+    slug: ("temperature",) for slug in FOLLOWUP_LUNA_SLUGS
+}
+
+
+def omitted_request_parameters(model: str) -> tuple:
+    """Bu modele GÖNDERİLMEYEN istek parametreleri (dondurulmuş rota gereği)."""
+    return tuple(MODEL_OMITTED_REQUEST_PARAMETERS.get(model, ()))
+
+
+def required_request_parameters(model: str) -> tuple:
+    cikarilan = set(omitted_request_parameters(model))
+    return tuple(p for p in BASE_REQUIRED_REQUEST_PARAMETERS if p not in cikarilan)
+
+
+def effective_request_policy(model: str, *,
+                             temperature: float = DEFAULT_TEMPERATURE) -> dict:
+    """İstenen ayarların bu model için FİİLEN uygulanan hali.
+
+    `temperature` istekte gerçekten iletilen değerdir: parametre çıkarılmışsa
+    None'dır ve `temperature_policy` bunun sebebini yazar.
+    """
+    cikarilan = omitted_request_parameters(model)
+    temperature_atlandi = "temperature" in cikarilan
+    return {
+        "request_policy_version": REQUEST_POLICY_VERSION,
+        "model": model,
+        "temperature": None if temperature_atlandi else temperature,
+        "temperature_policy": (TEMPERATURE_POLICY_OMITTED if temperature_atlandi
+                               else TEMPERATURE_POLICY_EXPLICIT),
+        "omitted_request_parameters": list(cikarilan),
+        "required_request_parameters": list(required_request_parameters(model)),
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "reasoning_config": REASONING_CONFIG,
+        "provider_routing": provider_routing_for(model),
+    }
+
+
+def request_temperature_kwargs(model: str,
+                               temperature: float = DEFAULT_TEMPERATURE) -> dict:
+    """litellm çağrısına eklenecek temperature kwargs'ı — BOŞ olabilir."""
+    if "temperature" in omitted_request_parameters(model):
+        return {}
+    return {"temperature": temperature}
+
+
+def request_policy_fingerprint(model: str, *,
+                               temperature: float = DEFAULT_TEMPERATURE) -> str:
+    """Etkili istek politikasının resume-kritik kimliği."""
+    return hashlib.sha256(
+        json.dumps(effective_request_policy(model, temperature=temperature),
+                   sort_keys=True, ensure_ascii=False,
+                   separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 # OpenRouter usage accounting: yanıtın usage bloğuna GERÇEK maliyeti ekler.
@@ -504,7 +879,9 @@ MAST_SCHEMA_VERSION = "3.2"
 # birim ARM-RUN; hiçbir ön-kayıtlı estimand, seed, karşılaştırma veya bootstrap
 # davranışı değişmedi ve p-değeri yine üretilmiyor. Sürüm artar çünkü çıktı
 # sözleşmesi genişledi.
-ANALYSIS_SCHEMA_VERSION = "2.2"
+# "2.3" = keşifsel `retry_outcome` bloğu: retry'a giren contract koşularının KOD
+# başarısı ayrıca raporlanır (birim arm-run, CI/test/p-değeri yok).
+ANALYSIS_SCHEMA_VERSION = "2.3"
 
 # --- RQ5 keşifsel bağlantı katmanı (§8.5) ------------------------------------
 # Self-consistency ↔ başarısızlık ilişkisi ve MAST kol dağılımı, ANA performans
@@ -574,3 +951,53 @@ COMPATIBILITY_SMOKE_TARGETS = {
     "gemini": MODEL_MAIN,
     "grok": MODEL_ADJUDICATOR,
 }
+
+
+# --- Takip koşularının retry katmanları (EXPERIMENT_PROTOCOL.md §13) ---
+# Study 1B/2 koşularında LiteLLM'in KENDİ (görünmez) transport retry'ı kapatılır
+# ve aynı sayıda deneme agents/llm.py'de GÖRÜNÜR bir döngüyle yapılır. Study 1A
+# yolu ETKİLENMEZ: orada hâlâ LLM_NUM_RETRIES geçilir.
+FOLLOWUP_LITELLM_NUM_RETRIES = 0
+TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT = LLM_NUM_RETRIES + 1
+PROVIDER_ATTEMPTS_PER_LOGICAL_CALL = LLM_PROVIDER_ERROR_RETRIES + 1
+
+# --- Study 2 değerlendiricisi: BigCodeBench resmî çalışma ortamı (§13) ---
+# Tarif `docker/bigcodebench/` altındadır ve `scripts/bigcodebench_runtime.py`
+# ile kurulur. Kaynak commit, temel imaj digest'i ve requirements baytları
+# sabitlenmiştir; yerel build'in imaj kimliği makineye göre DEĞİŞEBİLİR (apt
+# katmanları), bu yüzden kimlik eşitliği değil, koşu boyunca değişmezlik ve
+# kayıt altına alınması zorunludur. Makaledeki koşunun imaj kimliği referans
+# olarak saklanır.
+BIGCODEBENCH_SOURCE_REPO = "https://github.com/bigcode-project/bigcodebench.git"
+BIGCODEBENCH_FROZEN_COMMIT = "09dd993f46c3fbf3a799465bb96d524edcb0b199"
+BIGCODEBENCH_BASE_IMAGE = (
+    "python:3.10-slim@sha256:"
+    "855690f49a018755f1f69d689a3ce5fd42eadd255754299eb440b5a1b647fc1f")
+BIGCODEBENCH_REQUIREMENTS_SHA256 = (
+    "a4d01fb12cbce5223b51f982265cb7975bea770b758cd85cc91b803d3293e39f")
+BIGCODEBENCH_IMAGE_TAG = "multiagent-se/bigcodebench-official:g4v1"
+BIGCODEBENCH_PAPER_IMAGE_ID = (
+    "sha256:3d80a30b7f8d2c511032afec5305bfa05f4e6e96db98459efc187814dd11c920")
+BIGCODEBENCH_RUN_USER = "bigcodebenchuser"
+BIGCODEBENCH_EXPECTED_UID = 1000
+BIGCODEBENCH_OUTPUT_DIR = "/g6out"
+BIGCODEBENCH_ADAPTER_MODULE = "bigcodebench.eval"
+BIGCODEBENCH_ADAPTER_CALLABLE = "untrusted_check"
+BIGCODEBENCH_EVAL_LIMITS = {
+    "max_as_limit": 30 * 1024,
+    "max_data_limit": 30 * 1024,
+    "max_stack_limit": 10,
+    "min_time_limit": 1.0,
+    "gt_time_limit": 5.0,
+}
+# Bazı görevler NLTK stopwords verisine ihtiyaç duyar; değerlendirme ağsız
+# koştuğu için veri önceden salt-okunur bir cilde indirilir ve exact manifest
+# hash'i her değerlendirmeden önce doğrulanır.
+BIGCODEBENCH_RESOURCE_VOLUME = "multiagent-se-nltk-stopwords-v1"
+BIGCODEBENCH_RESOURCE_MOUNT = "/home/bigcodebenchuser/nltk_data"
+BIGCODEBENCH_RESOURCE_MANIFEST_SHA256 = (
+    "c06ae5113a8f80094b9cc93c7b23207a611c974e76cff7afc99c6934dcb0f871")
+BIGCODEBENCH_RESOURCE_FILE_COUNT = 35
+BIGCODEBENCH_RESOURCE_TOTAL_BYTES = 127179
+BIGCODEBENCH_RESOURCE_ENGLISH_SHA256 = (
+    "f6d005956f407dbc6ea32e5ff0c7e8e6f71488d3239b9023efdc7fc139d6375b")

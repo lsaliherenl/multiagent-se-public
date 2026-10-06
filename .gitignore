@@ -27,6 +27,9 @@ secrets*.json
 logs/*
 !logs/.gitkeep
 
+# BigCodeBench runtime build context (scripts/bigcodebench_runtime.py build)
+docker/bigcodebench/.context/
+
 # Private research and publication workspace (defense in depth)
 /publication/
 /.claude/
@@ -57,8 +60,6 @@ logs/*
 /tests/test_claim_map.py
 /tests/test_publication_artifacts.py
 /tests/test_style_gate.py
-/tasks_followup_dev/
-/tasks_study2_complex/
 
 # Office/editor temporary files
 ~$*.docx

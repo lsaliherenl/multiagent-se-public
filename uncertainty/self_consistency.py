@@ -55,6 +55,7 @@ from config import (
     SELF_CONSISTENCY_N,
     SELF_CONSISTENCY_SCHEMA_VERSION,
     SELF_CONSISTENCY_TEMPERATURE,
+    STUDY1A_TASK_SETS,
     TASK_SETS,
     model_alias_help,
     provider_routing_for,
@@ -731,14 +732,18 @@ def main() -> None:
                         help="ilk N görevi ölç (varsayılan: tümü)")
     parser.add_argument("--n", type=int, default=SELF_CONSISTENCY_N,
                         help="görev başına aday sayısı")
-    # ZORUNLU: self-consistency ana koşu verisidir (EXPERIMENT_PROTOCOL.md §8 —
+    # ZORUNLU: self-consistency ana koşu verisidir (EXPERIMENT_PROTOCOL.md §8.5 —
     # "ilişkilendirildiği ana üretici modelle AYNI model ve görev setinde
     # çalıştırılır"). Örtük bir varsayılan, korelasyonu yanlış modele bağlardı.
     parser.add_argument("--model", required=True, help=model_alias_help())
     parser.add_argument("--temperature", type=float, default=SELF_CONSISTENCY_TEMPERATURE)
     # §8.5: self-consistency, ilişkilendirildiği ana üretici modelle AYNI model
     # ve AYNI görev setinde koşmalı -- görev seti de bu yüzden açıkça istenir.
-    parser.add_argument("--task-set", required=True, choices=sorted(TASK_SETS))
+    # Seçenekler Study 1A setlerine SABİTLİ: takip çalışmalarının profil katmanı bu hattı
+    # kapsamaz (self-consistency takip çalışmalarına açılmadı). Tüm TASK_SETS
+    # sunulsaydı CLI, kapının reddedeceği takip setlerini yardım metninde
+    # çalışıyormuş gibi gösterirdi.
+    parser.add_argument("--task-set", required=True, choices=sorted(STUDY1A_TASK_SETS))
     args = parser.parse_args()
     # Üretici kapısı EN ÖNDE (anahtar/görev/çıktı dosyasından önce): §8.5 gereği
     # self-consistency ana koşu verisidir ve üretici-dışı bir modelle held-out

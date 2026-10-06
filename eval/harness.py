@@ -51,7 +51,7 @@ def load_all_tasks(task_set: str | None = None) -> list[dict]:
 
     task_set=None -> pilot/development seti (geriye dönük varsayılan).
     Ana deney "heldout" setini AÇIKÇA ister; iki set ayrı dizinlerde durur ki
-    yanlışlıkla karışmasınlar (EXPERIMENT_PROTOCOL.md §5).
+    yanlışlıkla karışmasınlar (EXPERIMENT_PROTOCOL.md §5.1).
 
     "_" ile başlayan dosyalar ATLANIR: görev dizini yardımcı belgeler de taşır
     (ör. _selection_manifest.json) ve bunların görev sanılması, görev sayısını
@@ -122,7 +122,15 @@ def evaluate_base_plus(task: dict, candidate_code: str) -> dict:
 
     Base/plus taşımayan (pilot) görevlerde tek koşu yapılır ve base alanları
     plus alanlarını yansıtır — analiz katmanı tek bir şema görür.
+
+    `evaluation_backend` alanı AÇIKÇA başka bir backend gösteriyorsa (Study 2'nin
+    BigCodeBench görevleri) çağrı ilk satırda o adaptöre yönlenir; aşağıdaki
+    EvalPlus gövdesi hiç çalışmaz ve etiketsiz görevler için değişmemiştir.
     """
+    # --- backend dispatch (etiketsiz görevlerde HİÇ çalışmaz) ---
+    if backend_of(task) != EVALPLUS_BACKEND:
+        return _dispatch_backend(task, candidate_code)
+    # --- buradan aşağısı tarihsel EvalPlus yolu: DEĞİŞMEDİ ---
     if not has_base_plus(task):
         single = evaluate(task, candidate_code)
         return {
@@ -145,6 +153,45 @@ def evaluate_base_plus(task: dict, candidate_code: str) -> dict:
         "plus_skipped_base_failed": base.status != "passed",
         **_legacy_fields(plus),
     }
+
+
+# --------------------------------------------------------------------------
+# Backend dispatcher
+# --------------------------------------------------------------------------
+# Study 1A/1B görevleri `evaluation_backend` alanı TAŞIMAZ; bu yüzden None
+# varsayılanı tarihsel EvalPlus/pilot yoluna gider. Yalnız AÇIKÇA etiketlenmiş
+# görevler yeni adaptöre yönlenir — etiketsiz bir görevin sessizce Docker'a
+# düşmesi mümkün değildir.
+#
+# Dispatch, çağrı yerlerine değil `evaluate_base_plus`ın İLK satırlarına
+# konur. Gerekçe metodolojiktir: `pipeline/baseline.py` ve `agents/tester.py`
+# Study 1A'nın dondurulmuş girdi dosyalarıdır; bu yerleşimle ikisi de BYTE
+# olarak değişmeden kalır ve iki rejim aynı çağrı yolunu paylaşır.
+EVALPLUS_BACKEND = "evalplus_base_plus_v1"
+BIGCODEBENCH_BACKEND = "bigcodebench_untrusted_check_v1"
+KNOWN_BACKENDS = (EVALPLUS_BACKEND, BIGCODEBENCH_BACKEND)
+
+
+def backend_of(task: dict) -> str:
+    """Görevin değerlendirme backend'i; etiketsiz görev = tarihsel EvalPlus yolu."""
+    backend = task.get("evaluation_backend")
+    if backend is None:
+        return EVALPLUS_BACKEND
+    if backend not in KNOWN_BACKENDS:
+        raise ValueError(
+            f"bilinmeyen evaluation_backend: {backend!r} "
+            f"(seçenekler: {list(KNOWN_BACKENDS)})")
+    return backend
+
+
+def _dispatch_backend(task: dict, candidate_code: str, **kwargs) -> dict:
+    """EvalPlus dışı backend'e yönlendirir.
+
+    Gecikmeli içe aktarma: Docker'a bağlı modül EvalPlus yolunda hiç
+    yüklenmesin (Study 1A yeniden üretimi Docker'sız çalışabilmelidir).
+    """
+    from eval.bigcodebench_backend import evaluate_bigcodebench
+    return evaluate_bigcodebench(task, candidate_code, **kwargs)
 
 
 def _result_fields(r: EvalResult) -> dict:

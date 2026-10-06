@@ -26,6 +26,8 @@ LiteLLM'nin kendi num_retries transport-katmanı retry'ıyla (aşağıda,
 görünmez) karışmasın diye -- farklı katman, farklı kavram.
 """
 
+import contextlib
+import contextvars
 import json
 import threading
 import time
@@ -37,6 +39,7 @@ import litellm
 
 from config import (
     DEFAULT_TEMPERATURE,
+    FOLLOWUP_LITELLM_NUM_RETRIES,
     LLM_CALL_SCHEMA_VERSION,
     LLM_MIN_INTERVAL_S,
     LLM_NUM_RETRIES,
@@ -47,12 +50,37 @@ from config import (
     MAX_OUTPUT_TOKENS,
     MODEL_PILOT,
     OPENROUTER_USAGE_ACCOUNTING,
+    PROVIDER_ATTEMPTS_PER_LOGICAL_CALL,
     REASONING_CONFIG,
     REQUEST_LOGPROBS,
+    TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT,
+    effective_request_policy,
     provider_routing_for,
+    request_temperature_kwargs,
+    require_dispatchable_model,
 )
 
-__all__ = ["ModelResponse", "ProviderResponseError", "call_model"]
+__all__ = ["ModelResponse", "ProviderResponseError", "call_model",
+           "followup_transport"]
+
+# `model` argümanının HİÇ VERİLMEMESİ ile AÇIKÇA None verilmesini ayıran
+# sentinel: omitted -> legacy debug varsayılanı; açık None -> fail-closed.
+_MODEL_NOT_PROVIDED = object()
+
+# Takip koşularında (Study 1B/2) transport retry LiteLLM'in içinde değil, bu
+# modülde GÖRÜNÜR bir döngüde yapılır (EXPERIMENT_PROTOCOL.md §13). Runner
+# yalnız takip kimlikli koşularda bu bağlamı açar; Study 1A yolu değişmez.
+_FOLLOWUP_TRANSPORT = contextvars.ContextVar("followup_transport", default=False)
+
+
+@contextlib.contextmanager
+def followup_transport():
+    """Bu bağlamdaki çağrılar takip koşularının retry katmanlarıyla yapılır."""
+    token = _FOLLOWUP_TRANSPORT.set(True)
+    try:
+        yield
+    finally:
+        _FOLLOWUP_TRANSPORT.reset(token)
 
 # Sağlayıcının desteklemediği parametreler (örn. Anthropic'te logprobs)
 # hata fırlatmak yerine sessizce düşürülür.
@@ -289,6 +317,40 @@ def _provider_error_details(response, model: str, latency_s: float,
     }
 
 
+def _completion(model, messages, temperature, kwargs, *, num_retries: int):
+    """TEK fiziksel dispatch girişimi (throttle dahil).
+
+    `temperature` KOŞULLU eklenir: dondurulmuş rotası bu parametreyi
+    desteklemeyen modellerde anahtar gövdeye HİÇ konmaz. Karar
+    `config.request_temperature_kwargs()` içinde verilir.
+    """
+    _throttle()
+    istek = {
+        "model": model, "messages": messages, "num_retries": num_retries,
+        "timeout": LLM_TIMEOUT_S,
+        **request_temperature_kwargs(model, temperature),
+        **_common_params(model), **kwargs,
+    }
+    return litellm.completion(**istek)
+
+
+def _visible_transport_attempt(model, messages, temperature, kwargs):
+    """Takip yolu: bir sağlayıcı denemesi içinde GÖRÜNÜR transport retry döngüsü.
+
+    LiteLLM'in kendi retry'ı kapalıdır (num_retries=0); aynı sayıda deneme
+    burada, artan bekleme ile yapılır. Son denemedeki istisna yükseltilir.
+    """
+    for transport_attempt in range(1, TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT + 1):
+        try:
+            return _completion(model, messages, temperature, kwargs,
+                               num_retries=FOLLOWUP_LITELLM_NUM_RETRIES)
+        except Exception:
+            if transport_attempt >= TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT:
+                raise
+            time.sleep(LLM_PROVIDER_ERROR_BACKOFF_S * transport_attempt)
+    raise AssertionError("ulaşılamaz: transport döngüsü ya döner ya yükseltir")
+
+
 def _log_path(experiment: str | None, namespace: str | None = None) -> Path:
     """Çağrı logunun yolu.
 
@@ -310,7 +372,7 @@ def _log_call(record: dict, log_path: Path) -> None:
 
 def call_model(
     messages: list[dict],
-    model: str | None = None,
+    model: str | None = _MODEL_NOT_PROVIDED,  # sentinel: bkz. _MODEL_NOT_PROVIDED
     temperature: float = DEFAULT_TEMPERATURE,
     *,
     task_id: str | None = None,
@@ -325,10 +387,12 @@ def call_model(
 ) -> ModelResponse:
     """LLM çağrısı yapar; her çağrıyı (başarılı VEYA başarısız) çağrı logune kaydeder.
 
-    model=None → config.MODEL_PILOT, FAKAT yalnız deney dışı (experiment=None)
-    kullanımda. experiment verilmişse model AÇIKÇA belirtilmek zorundadır:
-    ana deney verisinin sessizce pilot modele düşmesi, fark edilmesi en zor ve
-    en pahalı hata olurdu (bütün koşu çöpe gider). Bkz. EXPERIMENT_PROTOCOL.md §4.
+    `model` HİÇ verilmezse → config.MODEL_PILOT, FAKAT yalnız deney dışı
+    (experiment=None) kullanımda. experiment verilmişse model AÇIKÇA
+    belirtilmek zorundadır: ana deney verisinin sessizce pilot modele düşmesi,
+    fark edilmesi en zor ve en pahalı hata olurdu. AÇIKÇA None, boş string veya
+    çözülmemiş bir rol adı verilirse fail-closed durulur; varsayılan bir modele
+    düşülmez. Bkz. EXPERIMENT_PROTOCOL.md §4.
 
     Ortak model parametreleri (max_tokens, reasoning, provider routing) burada
     tek noktadan uygulanır — çağıran katman geçirmez.
@@ -337,18 +401,24 @@ def call_model(
     bağlamı içindir (litellm.completion'a asla sızmaz) — analiz aşamasında
     çağrıları deneye/kola/göreve/tekrara/role/denemeye göre gruplamak için.
     """
-    if experiment and not model:
-        raise ValueError(
-            "Deney koşusunda (experiment verilmiş) model açıkça belirtilmelidir; "
-            "örtük MODEL_PILOT'a düşmek ana deney verisini bozar."
-        )
-    model = model or MODEL_PILOT
+    if model is _MODEL_NOT_PROVIDED:
+        if experiment:
+            raise ValueError(
+                "Deney koşusunda (experiment verilmiş) model açıkça belirtilmelidir; "
+                "örtük MODEL_PILOT'a düşmek ana deney verisini bozar."
+            )
+        model = MODEL_PILOT
+    model = require_dispatchable_model(model)
     log_path = _log_path(experiment, log_namespace)
+    # Loglanan `temperature`, gövdede FİİLEN gönderilen değerdir; parametre
+    # çıkarılmışsa None'dır.
+    etkili = effective_request_policy(model, temperature=temperature)
+    followup = _FOLLOWUP_TRANSPORT.get()
     base_record = {
         "schema_version": LLM_CALL_SCHEMA_VERSION,
         "experiment": experiment, "run_id": run_id, "arm": arm, "repeat": repeat,
         "agent_attempt": agent_attempt, "model": model, "task_id": task_id,
-        "agent_role": agent_role, "temperature": temperature,
+        "agent_role": agent_role, "temperature": etkili["temperature"],
         "max_tokens": MAX_OUTPUT_TOKENS, "reasoning_config": REASONING_CONFIG,
         "provider_routing": provider_routing_for(model),
     }
@@ -358,20 +428,15 @@ def call_model(
     start = time.monotonic()
     provider_attempts = 0
     last_signature = None
-    for attempt in range(1, LLM_PROVIDER_ERROR_RETRIES + 2):
+    for attempt in range(1, PROVIDER_ATTEMPTS_PER_LOGICAL_CALL + 1):
         provider_attempts = attempt
         attempt_start = time.monotonic()
-        _throttle()
         try:
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                num_retries=LLM_NUM_RETRIES,
-                timeout=LLM_TIMEOUT_S,
-                **_common_params(model),
-                **kwargs,
-            )
+            if followup:
+                response = _visible_transport_attempt(model, messages, temperature, kwargs)
+            else:
+                response = _completion(model, messages, temperature, kwargs,
+                                       num_retries=LLM_NUM_RETRIES)
         except Exception as exc:
             _log_call({
                 "ts": datetime.now(timezone.utc).isoformat(),

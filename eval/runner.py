@@ -40,11 +40,22 @@ Tasarım:
   config.MODEL_PRODUCERS kabul edilir (judge/adjudicator modelleri ve tanımsız
   slug'lar reddedilir) — kontrol, API anahtarı/görev/çıktı dizini adımlarından
   ÖNCE yapılır.
+- Çalışma kimliği (EXPERIMENT_PROTOCOL.md §13): --study YOKSA koşu Study 1A
+  sayılır ve manifest biçimi değişmez. Takip çalışmaları (Study 1B/2) --study'yi
+  ZORUNLU kılar; Study 1B aynı 50 held-out görevi kullansa bile açık kimlik
+  ister. Takip manifestleri çalışma/profil kimliğini, etkili istek politikasını
+  ve (Study 2'de) değerlendirici imaj kimliğini KRİTİK alan olarak taşır.
+- Takip koşularında model çağrıları görünür transport retry katmanıyla yapılır
+  (agents/llm.py::followup_transport); Study 1A yolu değişmez.
 
 Kullanım:
     uv run python -m eval.runner --name gemini_main --model main --task-set heldout --repeats 3
     uv run python -m eval.runner --name gemini_main --model main --task-set heldout --repeats 3  # devam
     uv run python -m eval.runner --name smoke --model dev --task-set pilot --tasks 2 --repeats 1
+    uv run python -m eval.runner --name study1b_luna --study study1b \\
+        --model followup_secondary --task-set heldout --repeats 3
+    uv run python -m eval.runner --name study2_gemini --study study2 \\
+        --model main --task-set study2_complex --repeats 3
 """
 
 import argparse
@@ -60,25 +71,35 @@ from uuid import uuid4
 
 from agents.coder import SYSTEM_PROMPT as CODER_SYSTEM_PROMPT
 from agents.contracts import PlannerOutput
+from agents.llm import followup_transport
 from agents.planner import CONTRACT_SYSTEM_PROMPT, NAIVE_SYSTEM_PROMPT
 from config import (
     ALL_ARMS,
     ARM_BASELINE,
     ARM_ROTATION_SCHEME_VERSION,
+    BIGCODEBENCH_PAPER_IMAGE_ID,
     DEFAULT_TEMPERATURE,
+    FOLLOWUP_LITELLM_NUM_RETRIES,
+    FOLLOWUP_STUDY_IDS,
     HELDOUT_TASKS_DIR,
     LLM_CALL_SCHEMA_VERSION,
     LOGS_DIR,
     MAX_OUTPUT_TOKENS,
+    PRODUCER_ROLE_BINDINGS,
+    PROVIDER_ATTEMPTS_PER_LOGICAL_CALL,
     REASONING_CONFIG,
     RESULT_SCHEMA_VERSION,
     ROOT,
+    STUDY1A_TASK_SETS,
     TASK_SETS,
+    TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT,
+    effective_request_policy,
     model_alias_help,
     provider_routing_for,
-    validate_model_for_task_set,
+    request_policy_fingerprint,
+    validate_run_identity,
 )
-from eval.harness import load_all_tasks
+from eval.harness import BIGCODEBENCH_BACKEND, backend_of, load_all_tasks
 from eval.result_schema import (
     expected_resume_keys,
     integrity_report,
@@ -156,17 +177,35 @@ def position_balance(task_ids: list[str], arms: list[str], repeats: int) -> dict
     return counts
 
 
+# Study 1A manifestlerinin kritik alan kümesi — DEĞİŞMEZ (legacy biçim).
+LEGACY_CRITICAL_FIELDS = (
+    "model", "temperature", "max_tokens", "reasoning_config",
+    "provider_routing", "task_set", "task_ids", "arm_rotation_scheme",
+    "arm_order", "git_commit", "task_file_hashes", "uv_lock_hash",
+    "result_schema_version", "llm_call_schema_version",
+    "heldout_selection_fingerprint", "prompt_contract_hash",
+    "python_version", "platform",
+)
+# Takip koşularının EK kritik alanları (EXPERIMENT_PROTOCOL.md §13). Bir takip
+# dizini farklı çalışma/profil/istek politikası/değerlendirici imajıyla
+# sürdürülemez; legacy bir Study 1A dizini de takip kimliğiyle devralınamaz.
+FOLLOWUP_CRITICAL_FIELDS = (
+    "study_id", "protocol_version", "task_regime", "profile_fingerprint",
+    "model_requested", "request_policy_fingerprint", "temperature_policy",
+    "followup_litellm_num_retries", "transport_attempts_per_provider_attempt",
+    "provider_attempts_per_logical_call", "task_selection_fingerprint",
+    "evaluation_backend", "container_image_digest",
+)
+
+
 def check_or_write_manifest(out_dir: Path, config_snapshot: dict) -> None:
     """Manifest yoksa yazar; varsa kritik alanların değişmediğini doğrular."""
     manifest_path = out_dir / "manifest.json"
     # max_tokens/reasoning_config da KRİTİK: deney ortasında değişirlerse kollar
     # farklı üretim koşullarında koşmuş olur (iç geçerlilik kırılır).
-    critical = ("model", "temperature", "max_tokens", "reasoning_config",
-                "provider_routing", "task_set", "task_ids", "arm_rotation_scheme",
-                "arm_order", "git_commit", "task_file_hashes", "uv_lock_hash",
-                "result_schema_version", "llm_call_schema_version",
-                "heldout_selection_fingerprint", "prompt_contract_hash",
-                "python_version", "platform")
+    critical = LEGACY_CRITICAL_FIELDS
+    if "study_id" in config_snapshot:
+        critical = LEGACY_CRITICAL_FIELDS + FOLLOWUP_CRITICAL_FIELDS
     # Kritik alan listesi büyüdüğünde çağıran taraf onu eklemeyi unutursa,
     # sessiz KeyError yerine açık hata: eksik alan = korunmayan alan demektir.
     missing = [k for k in critical if k not in config_snapshot]
@@ -254,6 +293,53 @@ def _heldout_selection_fingerprint() -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _canonical_hash(payload) -> str:
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _task_selection_fingerprint(task_set: str) -> str | None:
+    """Görev setinin dondurulmuş seçim manifestinin DEĞİŞMEZ kısmının hash'i.
+
+    `created_ts` ve `reference_timings` dışlanır (ortama bağlı gözlemler).
+    Study 1A ve Study 1B aynı manifestten AYNI değeri türetir.
+    """
+    path = TASK_SETS[task_set] / "_selection_manifest.json"
+    if not path.exists():
+        return None
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    manifest.pop("created_ts", None)
+    for source in manifest.get("sources", {}).values():
+        if isinstance(source, dict):
+            source.pop("reference_timings", None)
+    return _canonical_hash(manifest)
+
+
+def evaluator_preflight(tasks: list[dict]) -> dict:
+    """Görev setinin değerlendiricisi koşuya hazır mı; kimliğini döndürür.
+
+    EvalPlus görevleri host sandbox'ında koşar (ön koşul yok). BigCodeBench
+    görevleri için imaj ve NLTK kaynak cildi, HİÇBİR model çağrısından önce
+    doğrulanır: değerlendiricisi olmayan bir koşu, yalnız `run_error` üreten
+    ücretli çağrılar demektir.
+    """
+    backends = {backend_of(t) for t in tasks}
+    if len(backends) != 1:
+        raise ValueError(f"görev setinde birden fazla değerlendirici var: {sorted(backends)}")
+    backend = backends.pop()
+    if backend != BIGCODEBENCH_BACKEND:
+        return {"evaluation_backend": backend, "container_image_digest": None}
+    from eval import bigcodebench_backend as bcb
+    docker = bcb.DockerChannel()
+    image_id = bcb._image_identity(docker)
+    bcb.verify_resource_volume(docker)
+    return {"evaluation_backend": backend, "container_image_digest": image_id}
+
+
 def _prompt_contract_hash() -> str:
     """Prompt gövdeleri + sözleşme şemasının hash'i.
 
@@ -273,8 +359,22 @@ def _prompt_contract_hash() -> str:
 
 def execute_run(arm: str, task: dict, repeat: int, model: str, graphs: dict, *,
                 experiment: str, run_id: str, arm_position: int,
-                task_set: str) -> dict:
-    """Tek koşuyu yürütür ve sonucu sözleşmeye uygun biçimde damgalar."""
+                task_set: str, followup: bool = False) -> dict:
+    """Tek koşuyu yürütür ve sonucu sözleşmeye uygun biçimde damgalar.
+
+    `followup=True` (Study 1B/2) iken bütün model çağrıları takip koşularının
+    görünür transport retry katmanıyla yapılır; istek gövdesi değişmez.
+    """
+    if followup:
+        with followup_transport():
+            return _execute(arm, task, repeat, model, graphs, experiment=experiment,
+                            run_id=run_id, arm_position=arm_position, task_set=task_set)
+    return _execute(arm, task, repeat, model, graphs, experiment=experiment,
+                    run_id=run_id, arm_position=arm_position, task_set=task_set)
+
+
+def _execute(arm: str, task: dict, repeat: int, model: str, graphs: dict, *,
+             experiment: str, run_id: str, arm_position: int, task_set: str) -> dict:
     if arm == ARM_BASELINE:
         record = baseline_run_task(task, model, DEFAULT_TEMPERATURE,
                                    experiment=experiment, run_id=run_id, repeat=repeat)
@@ -288,7 +388,62 @@ def execute_run(arm: str, task: dict, repeat: int, model: str, graphs: dict, *,
                         run_id=run_id, arm_position=arm_position)
 
 
-def main() -> None:
+def build_manifest_snapshot(*, name: str, identity, arms: list[str], repeats: int,
+                            task_ids: list[str], evaluator: dict) -> dict:
+    """Manifest anlık görüntüsü; Study 1A'da tarihsel biçim AYNEN korunur."""
+    model = identity.model
+    snapshot = {
+        "name": name,
+        "created_ts": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "temperature": DEFAULT_TEMPERATURE,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "reasoning_config": REASONING_CONFIG,
+        "provider_routing": provider_routing_for(model),
+        "arm_order": arms,   # SIRALANMAMIŞ -- rotasyonun fiilen kullandığı liste
+        "repeats": repeats,
+        "task_set": identity.task_set,
+        "task_ids": task_ids,
+        "arm_rotation_scheme": ARM_ROTATION_SCHEME_VERSION,
+        "result_schema_version": RESULT_SCHEMA_VERSION,
+        "llm_call_schema_version": LLM_CALL_SCHEMA_VERSION,
+        "heldout_selection_fingerprint": _heldout_selection_fingerprint(),
+        "prompt_contract_hash": _prompt_contract_hash(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "git_commit": _git_commit(),
+        "task_file_hashes": _hash_task_files(task_ids, identity.task_set),
+        "uv_lock_hash": _hash_uv_lock(),
+    }
+    if not identity.is_followup:
+        return snapshot
+    if identity.task_set not in STUDY1A_TASK_SETS:
+        # EvalPlus held-out seçimi Study 2 görevleriyle ilgisizdir; alan bu
+        # setlerde None'dır (görev kimliği `task_selection_fingerprint`'tedir).
+        snapshot["heldout_selection_fingerprint"] = None
+    policy = effective_request_policy(model)
+    snapshot.update({
+        **identity.manifest_fields(),
+        "model_requested": identity.model_requested,
+        "producer_role": identity.producer_role,
+        # `temperature` İSTENEN değerdir; FİİLEN iletilip iletilmediğini
+        # `temperature_policy` söyler (Luna'da parametre gövdeye hiç konmaz).
+        "temperature_policy": policy["temperature_policy"],
+        "request_policy_fingerprint": request_policy_fingerprint(model),
+        "followup_litellm_num_retries": FOLLOWUP_LITELLM_NUM_RETRIES,
+        "transport_attempts_per_provider_attempt": TRANSPORT_ATTEMPTS_PER_PROVIDER_ATTEMPT,
+        "provider_attempts_per_logical_call": PROVIDER_ATTEMPTS_PER_LOGICAL_CALL,
+        "task_selection_fingerprint": _task_selection_fingerprint(identity.task_set),
+        "evaluation_backend": evaluator["evaluation_backend"],
+        "container_image_digest": evaluator["container_image_digest"],
+        "container_image_matches_paper": (
+            evaluator["container_image_digest"] == BIGCODEBENCH_PAPER_IMAGE_ID
+            if evaluator["container_image_digest"] else None),
+    })
+    return snapshot
+
+
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="4 kollu deney çalıştırıcı")
     parser.add_argument("--name", required=True,
                         help="deney adı (çıktı: logs/exp_<name>/); devam için aynı adı ver")
@@ -296,22 +451,29 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--tasks", type=int, default=None, help="ilk N görev (varsayılan: tümü)")
     parser.add_argument("--model", required=True,
-                        help=f"{model_alias_help()}. ZORUNLU: ana deneyin örtük bir "
+                        help=f"üretici rolü ({'|'.join(PRODUCER_ROLE_BINDINGS)}), "
+                             f"{model_alias_help()}. ZORUNLU: ana deneyin örtük bir "
                              "varsayılana düşmesi engellenir. Held-out sette yalnız "
-                             "üretici modeller kabul edilir.")
+                             "ilgili çalışmanın üretici modelleri kabul edilir.")
     # Görev seti de ZORUNLU: pilot ve held-out setlerin karışması, sonucu
     # sessizce geçersiz kılan türden bir hata olurdu (§5.1).
     parser.add_argument("--task-set", required=True, choices=sorted(TASK_SETS),
-                        help="pilot (development, 20 görev) | heldout (ana deney, 50 görev)")
-    args = parser.parse_args()
-    # Üretici kapısı EN ÖNDE: anahtar kontrolü, görev yükleme ve çıktı dizini
-    # oluşturmadan önce. Aksi halde yanlış modelle açılmış bir deney dizini ve
-    # manifest geride kalır; sonraki doğru koşu ya bu dizine devam etmeye
-    # çalışır ya da yarım kalmış bir artefakt bırakır.
+                        help="pilot (development, 20 görev) | heldout (Study 1A/1B, "
+                             "50 görev) | followup_dev, study2_complex (yalnız --study ile)")
+    parser.add_argument("--study", choices=list(FOLLOWUP_STUDY_IDS), default=None,
+                        help="takip çalışması kimliği; verilmezse koşu Study 1A "
+                             "sayılır. Study 1B ve Study 2 bu bayrak olmadan "
+                             "başlatılamaz.")
+    args = parser.parse_args(argv)
+    # Kimlik/üretici kapısı EN ÖNDE: anahtar kontrolü, görev yükleme ve çıktı
+    # dizini oluşturmadan önce. Aksi halde yanlış kimlikle açılmış bir deney
+    # dizini ve manifest geride kalır.
     try:
-        model = validate_model_for_task_set(args.model, args.task_set)
+        identity = validate_run_identity(task_set=args.task_set, model=args.model,
+                                         study=args.study)
     except ValueError as e:
         sys.exit(str(e))
+    model = identity.model
 
     if not (os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
         sys.exit("API anahtarı yok — .env.example'ı .env olarak kopyalayıp doldur.")
@@ -324,31 +486,18 @@ def main() -> None:
     task_ids = [t["task_id"] for t in tasks]
     tasks_by_id = {t["task_id"]: t for t in tasks}
 
+    # Değerlendirici ön koşulu çıktı dizini AÇILMADAN önce: değerlendiricisi
+    # olmayan bir koşu yalnız run_error üreten ücretli çağrılar bırakır.
+    try:
+        evaluator = evaluator_preflight(tasks)
+    except Exception as e:
+        sys.exit(f"değerlendirici hazır değil: {e}")
+
     out_dir = LOGS_DIR / f"exp_{args.name}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    check_or_write_manifest(out_dir, {
-        "name": args.name,
-        "created_ts": datetime.now(timezone.utc).isoformat(),
-        "model": model,
-        "temperature": DEFAULT_TEMPERATURE,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "reasoning_config": REASONING_CONFIG,
-        "provider_routing": provider_routing_for(model),
-        "arm_order": args.arms,   # SIRALANMAMIŞ -- rotasyonun fiilen kullandığı liste
-        "repeats": args.repeats,
-        "task_set": args.task_set,
-        "task_ids": task_ids,
-        "arm_rotation_scheme": ARM_ROTATION_SCHEME_VERSION,
-        "result_schema_version": RESULT_SCHEMA_VERSION,
-        "llm_call_schema_version": LLM_CALL_SCHEMA_VERSION,
-        "heldout_selection_fingerprint": _heldout_selection_fingerprint(),
-        "prompt_contract_hash": _prompt_contract_hash(),
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "git_commit": _git_commit(),
-        "task_file_hashes": _hash_task_files(task_ids, args.task_set),
-        "uv_lock_hash": _hash_uv_lock(),
-    })
+    check_or_write_manifest(out_dir, build_manifest_snapshot(
+        name=args.name, identity=identity, arms=args.arms, repeats=args.repeats,
+        task_ids=task_ids, evaluator=evaluator))
 
     results_path = out_dir / "results.jsonl"
     existing = load_records(results_path)
@@ -365,7 +514,9 @@ def main() -> None:
     completed = {resume_key(r) for r in existing if not is_run_error(r)}
     plan = build_run_plan(task_ids, args.arms, args.repeats, completed, model)
     total = len(task_ids) * len(args.arms) * args.repeats
-    print(f"deney: {args.name} | model: {model} | görev seti: {args.task_set}")
+    print(f"deney: {args.name} | çalışma: {identity.study_id} "
+          f"({identity.protocol_version}) | rejim: {identity.task_regime}")
+    print(f"model: {model} | görev seti: {args.task_set}")
     print(f"beklenen {total} kayıt ({len(task_ids)} görev × {args.repeats} tekrar "
           f"× {len(args.arms)} kol); {len(completed)} tamam, {len(plan)} bekliyor")
     print("kol × konum dengesi:", position_balance(task_ids, args.arms, args.repeats), "\n")
@@ -378,7 +529,8 @@ def main() -> None:
             try:
                 record = execute_run(arm, tasks_by_id[task_id], rep, model, graphs,
                                      experiment=args.name, run_id=run_id,
-                                     arm_position=position, task_set=args.task_set)
+                                     arm_position=position, task_set=args.task_set,
+                                     followup=identity.is_followup)
             except Exception as e:
                 errors += 1
                 record = make_run_error_record(

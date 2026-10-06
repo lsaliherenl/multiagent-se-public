@@ -109,6 +109,73 @@ def validate_record(record: dict) -> list[str]:
         if field not in record:
             problems.append(f"{record['arm']} kolunda eksik alan: {field}")
     problems += _handoff_problems(record)
+    problems += _bigcodebench_problems(record)
+    return problems
+
+
+# --- BigCodeBench (Study 2) backend'inin ek sözleşmesi ---------------------
+# Bu blok YALNIZ `evaluation_backend` alanı AÇIKÇA BigCodeBench olan kayıtlarda
+# çalışır. Study 1A/1B kayıtları bu alanı taşımaz ve doğrulama çıktıları
+# harfiyen değişmez — bu yüzden RESULT_SCHEMA_VERSION bump EDİLMEDİ:
+# dondurulmuş artefaktların yeniden doğrulanabilirliği (§39 denetimi) korunur.
+BIGCODEBENCH_BACKEND = "bigcodebench_untrusted_check_v1"
+BIGCODEBENCH_METRIC = "bigcodebench_hidden_test_pass"
+BIGCODEBENCH_REQUIRED_FIELDS = (
+    "primary_status", "primary_pass", "primary_error_class",
+    "primary_duration_s", "evaluation_metric", "source_task_id",
+    "plus_pass_is_compatibility_alias", "evaluator_provenance",
+)
+
+
+def _bigcodebench_problems(record: dict) -> list[str]:
+    """BigCodeBench kaydının birincil metriği ve uyumluluk aynası tutarlı mı.
+
+    `plus_pass` burada bir "Plus test" sonucu DEĞİLDİR; ikinci bir test kümesi
+    yoktur. Alan yalnız teknik uyumluluk için AYNI boolean'ı taşır. Bu ayrımın
+    kayıtta görünür olması zorunludur, yoksa analiz katmanı iki farklı metriği
+    tek isimle raporlar.
+    """
+    backend = record.get("evaluation_backend")
+    if backend != BIGCODEBENCH_BACKEND:
+        if record.get("plus_pass_is_compatibility_alias") is not None:
+            return ["plus_pass_is_compatibility_alias yalnız BigCodeBench "
+                    "backend'inde bulunabilir"]
+        if record.get("evaluation_metric") == BIGCODEBENCH_METRIC:
+            return ["evaluation_metric BigCodeBench ama evaluation_backend değil"]
+        return []
+
+    problems = [f"eksik BigCodeBench alanı: {f}"
+                for f in BIGCODEBENCH_REQUIRED_FIELDS if f not in record]
+    if problems:
+        return problems
+    if record["evaluation_metric"] != BIGCODEBENCH_METRIC:
+        problems.append(f"evaluation_metric beklenmiyor: "
+                        f"{record['evaluation_metric']!r}")
+    if not isinstance(record["primary_pass"], bool):
+        problems.append(f"primary_pass bool değil: {record['primary_pass']!r}")
+    if record.get("base_plus_available") is not False:
+        problems.append("BigCodeBench kaydında base_plus_available False olmalı")
+    if record["plus_pass_is_compatibility_alias"] is not True:
+        problems.append("plus_pass_is_compatibility_alias True olmalı")
+    for mirror in ("plus_pass", "base_pass"):
+        if record.get(mirror) != record["primary_pass"]:
+            problems.append(f"{mirror} birincil metriği yansıtmıyor")
+    for mirror in ("plus_status", "base_status", "status"):
+        if record.get(mirror) != record["primary_status"]:
+            problems.append(f"{mirror} birincil durumu yansıtmıyor")
+    # Gizli test metni sonuç kaydına GİREMEZ.
+    if record.get("traceback") is not None:
+        problems.append("BigCodeBench kaydında traceback None olmalı "
+                        "(gizli test sızıntısı yasağı)")
+    source = record["source_task_id"]
+    if not isinstance(source, str) or not source.startswith("BigCodeBench/"):
+        problems.append(f"source_task_id biçimsiz: {source!r}")
+    else:
+        suffix = source.split("/", 1)[1]
+        if not suffix.isdigit():
+            problems.append(f"source_task_id sayısal değil: {source!r}")
+        elif f"bigcodebench_{int(suffix):04d}" != record["task_id"]:
+            problems.append("source_task_id ile task_id eşleşmiyor")
     return problems
 
 

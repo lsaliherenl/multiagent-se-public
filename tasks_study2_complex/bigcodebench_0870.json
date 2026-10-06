@@ -1,0 +1,29 @@
+{
+  "assignment_position": 22,
+  "blind_id": "G9-50d9227df14e2b32",
+  "entry_point": "task_func",
+  "evaluation_backend": "bigcodebench_untrusted_check_v1",
+  "evaluation_metric": "bigcodebench_hidden_test_pass",
+  "prompt": "Calculate the mean of numerical values in each position across tuples in a list. Non-numeric values are ignored, and means are computed only from available data. That means that missing data in some of the tuples is simply ignored. A DataFrame with one columns named 'Mean Value' which contains the mean values for all tuple positions. The index is according to this scheme: 'Position i' where i is the current position. If an empty list is passed, then an empty DataFrame is returned. >>> data = [('a', '1', 2.1), ('b', 21, 'c'), (12, 3, 4.3), (['d'], 4, 5.4), ('e', 5, 6.5)] >>> df = task_func() >>> print(df) Mean Value Position 0         NaN Position 1         3.0 Position 2         4.3\nThe function should output with:\n    DataFrame: A pandas DataFrame with the mean values of the numerical data at each position.\nYou should write self-contained code starting with:\n```\nimport pandas as pd\nimport numpy as np\nimport itertools\ndef task_func(data_list=[('a', 1, 2.1), ('b', 2, 3.2), ('c', 3, 4.3), ('d', 4, 5.4), ('e', 5, 6.5)]):\n```",
+  "prompt_sha256": "387b89150839cdc43896b788198b6507c669344579a04844aa5e51932c1720ef",
+  "provenance": {
+    "dataset_sha256": "73a4270b43feb81abefad7bb1b592937c768ea45c3263bedc1cabd30a9a6ce79",
+    "evaluator_image_id": "sha256:3d80a30b7f8d2c511032afec5305bfa05f4e6e96db98459efc187814dd11c920",
+    "prompt_field": "instruct_prompt",
+    "reference_assembly_used_for_gate_only": "complete_prompt + LF + canonical_solution",
+    "reference_gate_id": "D3-REF-3of3",
+    "reference_plan_fingerprint": "dd32bea6bd823350f5c55640665afbac1de3f9774fee5fd2f0fc5c6650236c4d",
+    "reference_state": "PASS",
+    "role_manifest_sha256": "84af0d6f43bc37a612a005f14897ffdd7eb31984a6fac6a8fb84652824718191",
+    "specification_packet_sha256": "fa6ec22806fa76b8403aae52c1eef875426a4047f7f0c02df6492809104d1421"
+  },
+  "reference_payload_sha256": "54b7cd11f0b06c71c926674dd8973a3d90b832287d2c5efd08c5942bb4471afd",
+  "role": "held_out",
+  "schema_version": "1.0",
+  "source": "BigCodeBench-Hard",
+  "source_task_id": "BigCodeBench/870",
+  "task_id": "bigcodebench_0870",
+  "task_set": "study2_complex",
+  "test_code": "import unittest\nimport pandas as pd\nimport numpy as np\nclass TestCases(unittest.TestCase):\n    def test_default_data(self):\n        df = task_func()\n        self.assertTrue(np.isnan(df.loc['Position 0', 'Mean Value']))\n        self.assertTrue(df.loc['Position 1', 'Mean Value'] == 3.0)\n        self.assertTrue(df.loc['Position 2', 'Mean Value'] == 4.3)\n    def test_custom_data(self):\n        custom_data = [('x', 10, 20.5), ('y', 20, 40.6), ('z', 30, 60.7)]\n        df = task_func(custom_data)\n        self.assertTrue(df.loc['Position 1', 'Mean Value'] == 20.0)\n        self.assertTrue(df.loc['Position 2', 'Mean Value'] == 40.6)\n    def test_incomplete_data(self):\n        incomplete_data = [('a', 1), ('b', 2, 3.2), ('c',), ('d', 4, 5.4), ('e', 5, 6.5)]\n        df = task_func(incomplete_data)\n        self.assertTrue(df.loc['Position 1', 'Mean Value'] == 3.0)\n        self.assertTrue(np.isclose(df.loc['Position 2', 'Mean Value'], 5.0333333))  # corrected expected value\n    def test_empty_data(self):\n        df = task_func([])\n        self.assertTrue(df.empty)\n    def test_non_numeric_data(self):\n        non_numeric = [('a', 'x', 'y'), ('b', 'y', 'z'), ('c', 'z', 'x')]\n        df = task_func(non_numeric)\n        self.assertTrue(df.isna().values.all())",
+  "test_sha256": "2503586a44b88cee4db0919f687f0429b440563796e117a8ab680e82bab57ea1"
+}

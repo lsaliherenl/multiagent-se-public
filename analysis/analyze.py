@@ -67,7 +67,8 @@ __all__ = [
     "AnalysisError", "load_jsonl", "load_experiment", "single_model",
     "check_provenance", "check_integrity", "validate_calls", "task_level_rates",
     "paired_diffs", "bootstrap_draws", "bootstrap_ci", "paired_effect",
-    "base_plus_attrition", "compliance_summary", "usage_by_run", "usage_summary",
+    "base_plus_attrition", "compliance_summary", "retry_outcome_summary",
+    "usage_by_run", "usage_summary",
     "analyze", "write_outputs",
 ]
 
@@ -409,6 +410,77 @@ def compliance_summary(records: list[dict], arms: list[str]) -> dict:
     return out
 
 
+def _pass_block(recs: list[dict]) -> dict:
+    n = len(recs)
+    base = sum(bool(r["base_pass"]) for r in recs)
+    plus = sum(bool(r["plus_pass"]) for r in recs)
+    return {
+        "runs": n,
+        "base_pass_count": base,
+        "base_pass_rate": base / n if n else None,
+        "plus_pass_count": plus,
+        "plus_pass_rate": plus / n if n else None,
+    }
+
+
+def retry_outcome_summary(records: list[dict], arms: list[str]) -> dict:
+    """RQ3 tamamlayıcısı: validator retry'ı KOD başarısına yansıyor mu?
+
+    `compliance_summary()` "retry sözleşme uyumunu kurtardı mı" sorusunu cevaplar
+    (kurtarma oranı). Bu fonksiyon AYRI bir soruyu cevaplar: kurtarılan koşular
+    sonunda test başarısında da ayrışıyor mu, yoksa şema ihlali nihai kod
+    doğruluğundan bağımsız bir katman mı?
+
+    Birim ARM-RUN'dır, görev DEĞİL; bu bir BETİMLEYİCİDİR, ön-kayıtlı estimand
+    değil (`exploratory=True`). Güven aralığı veya test üretilmez: `retried`
+    tabakası tasarım gereği küçüktür ve tabakalar rastgele atanmamıştır — retry'a
+    girmek modelin kendi çıktısının sonucudur, bu yüzden tabakalar arası fark
+    nedensel okunamaz.
+
+    `retried_task_reference`, retry tetikleyen görevlerin DİĞER kollardaki
+    başarısını verir: "bu görevler zaten anormal zor muydu?" sorusunun tek
+    kontrolü budur. Görev kümesi `attempt_count > 1` olan EN AZ BİR contract
+    koşusu bulunan görevlerdir (bir görevin üç tekrarının hepsi retry'a girmek
+    zorunda değildir).
+
+    Retry hiç oluşmamışsa (ör. tek denemede %100 uyum) oranlar None kalır ve
+    `undefined_reason` doldurulur — sıfır payda sessizce 0.0 diye yazılmaz.
+    """
+    if ARM_CONTRACT not in arms:
+        return {"unit": "arm_run", "exploratory": True, "arm": ARM_CONTRACT,
+                "available": False, "undefined_reason": "contract_arm_absent"}
+
+    contract_recs = [r for r in records
+                     if r["arm"] == ARM_CONTRACT and not is_run_error(r)]
+    retried = [r for r in contract_recs if r["attempt_count"] > 1]
+    first_try = [r for r in contract_recs if r["attempt_count"] == 1]
+    retried_tasks = sorted({r["task_id"] for r in retried})
+
+    reference = {}
+    for arm in arms:
+        recs = [r for r in records if r["arm"] == arm and not is_run_error(r)
+                and r["task_id"] in set(retried_tasks)]
+        reference[arm] = _pass_block(recs)
+
+    return {
+        "unit": "arm_run",
+        "exploratory": True,
+        "estimand": "descriptive",
+        "arm": ARM_CONTRACT,
+        "available": True,
+        "undefined_reason": None if retried else "no_retried_runs",
+        "strata": {
+            "retried": _pass_block(retried),
+            "first_attempt": _pass_block(first_try),
+        },
+        "retried_task_reference": {
+            "n_tasks": len(retried_tasks),
+            "task_ids": retried_tasks,
+            "by_arm": reference,
+        },
+    }
+
+
 def base_plus_attrition(records: list[dict], arms: list[str]) -> dict:
     """RQ5 §2 üçüncü sorusu: base geçen çözümlerin ne kadarı Plus'ta eleniyor?
 
@@ -679,6 +751,7 @@ def analyze(manifest: dict, records: list[dict], calls: list[dict], *,
         "paired_effects": effects,
         "base_plus_attrition": base_plus_attrition(records, arms),
         "compliance": compliance_summary(records, arms),
+        "retry_outcome": retry_outcome_summary(records, arms),
         "usage": usage_summary(usage_rows, arms),
         "_task_rates": rates,
         "_usage_rows": usage_rows,

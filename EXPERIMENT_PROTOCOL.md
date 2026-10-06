@@ -90,9 +90,80 @@ schema instead of being silently dropped.
    sandbox. Use a disposable container or VM for untrusted code.
 6. Store generated runs outside version control under `logs/`.
 
+## 13. Follow-up studies (Study 1B and Study 2)
+
+The original design above is Study 1A. Two follow-up studies reuse the same
+four arms, prompts, planner, coder, validator, and result contract; they change
+only the producer roster and, for Study 2, the task regime. Every follow-up run
+is started with an explicit `--study` identity; without it the runner treats a
+run as Study 1A and refuses the Study 2 task sets.
+
+| Study | Task set | Regime | Producers |
+| --- | --- | --- | --- |
+| 1B | `tasks_heldout/` (the same 50 tasks as Study 1A) | EvalPlus | Gemini 3.5 Flash Lite, GPT-5.6 Luna |
+| 2 | `tasks_study2_complex/` (50 tasks) | BigCodeBench-Hard | Gemini 3.5 Flash Lite, GPT-5.6 Luna |
+
+Development sets (`tasks/` for Study 1B, `tasks_followup_dev/` with 16 tasks
+for Study 2) are for technical calibration only and never enter the primary
+statistics. DeepSeek (the Study 1A replication model) does not produce
+follow-up data, and judge or adjudicator models produce no data in any study.
+Study 3 was deferred and has no profile in this distribution.
+
+**Study 2 task set.** The tasks come from the `v0.1.4` split of
+BigCodeBench-Hard at a fixed dataset revision. Of 148 tasks, 6 were removed by
+a rule fixed before task content was inspected, and a structural-complexity
+filter admitted 66 of the remaining 142. The prespecified pool gate required
+80 eligible tasks and therefore failed; two protocol amendments followed,
+both before any Study 2 result was seen: the 66 eligible tasks were split with
+a frozen seed into 16 development and 50 held-out tasks, and a human-annotated
+edge-case criterion was turned from an eligibility gate into a descriptive
+attribute. The selection pipeline itself is not distributed; the frozen task
+files and their selection manifests are, and the runner records their hashes.
+
+**Request policy.** The generation policy is the same as Study 1A
+(temperature 0.2, 8,192 output tokens, reasoning enabled for every role and
+arm), with one route-level exception: the GPT-5.6 Luna route does not accept
+`temperature`, so the field is omitted from Luna requests (never sent as
+`null`) and the manifest records `temperature_policy`. Luna is pinned to the
+OpenAI Standard endpoint with fallbacks disabled; Gemini keeps the default
+routing policy. In follow-up runs the LiteLLM transport retry is disabled and
+the same number of attempts is made in a visible loop in `agents/llm.py`; the
+request body is unchanged.
+
+**Study 2 evaluation.** Candidate code is scored by the official BigCodeBench
+`untrusted_check` inside a pinned evaluation image with `--network none`
+(`docker/bigcodebench/`, built by `scripts/bigcodebench_runtime.py`). A
+read-only NLTK stopwords volume is verified by manifest hash before every
+evaluation. BigCodeBench has a single hidden test suite, so `plus_pass` is a
+compatibility alias of the same result, there is no Base-to-Plus attrition
+measurement, and hidden tests never enter result records. A fresh image build
+can have a different image ID from the paper's run; the ID is recorded in
+every Study 2 manifest and must not change during a run.
+
+**Estimands.** Each model-study cell is analysed separately with the Study 1A
+procedure (§8). The primary confirmatory estimand is `contract - naive` on
+Plus pass in the Study 2 Gemini cell; the Study 2 Luna cell is its
+replication. Secondary, descriptive estimands are the mechanism contrasts in
+all follow-up cells, the moderation difference `Delta[Study 2] - Delta[Study
+1B]` per model (the two regimes' tasks are resampled independently), and the
+Study 1A to Study 1B Gemini bridge on the same 50 tasks (tasks are resampled
+jointly). A complexity-slope estimand was gated on task overlap and was not
+run. Regimes and models are never pooled, unresolved `run_error` rows block
+the analysis, and no p-value is produced (`analysis/followup.py`).
+Error-class shares are not compared across regimes, because the two
+evaluators use different failure taxonomies.
+
+**Not distributed.** The original runs were additionally governed by a spend
+ledger, provider-health and price-drift gates, and per-phase authorization
+records. These controlled cost and operations, not request content, and are
+not part of this distribution. `reproduction/paper_run_identity.json` records
+the identity of the paper's held-out runs, and
+`tests/test_followup.py` checks that this code reproduces every field it
+determines.
+
 ## Public/private boundary
 
-The public repository contains implementation, tests, task definitions, and
-this protocol. It excludes raw model outputs, result datasets, manuscript
-sources, generated paper assets, internal notes, unpublished follow-up study
-code, and claim-specific analysis modules.
+The public repository contains implementation, tests, task definitions, the
+paper's supplementary material, and this protocol. It excludes raw model
+outputs, result datasets, manuscript sources, internal notes, and the
+operational gating code of the original runs.

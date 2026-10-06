@@ -859,3 +859,88 @@ def test_run_error_elenme_paydasina_girmez():
     kirli = analyze(_manifest(task_ids), [*records, hatali], _calls(records),
                     iterations=ITER)
     assert temiz["base_plus_attrition"] == kirli["base_plus_attrition"]
+
+
+# --- retry_outcome: uyum kurtarma ≠ kod başarısı ------------------------------
+# compliance_summary "retry sözleşmeyi kurtardı mı" sorusunu cevaplar. Buradaki
+# blok AYRI bir soruyu cevaplar: kurtarılan koşular test başarısında ayrışıyor
+# mu? İkisi karışırsa "validator işe yaradı" iddiası kanıtlanmamış bir kod
+# başarısı iddiasına dönüşür.
+
+def _retry_kayitlari(task_ids, *, retry_gorevleri, plus_gecen, repeats=3):
+    """contract kolunda seçili görevlerin İLK tekrarı retry'a girer."""
+    out = []
+    for rep in range(repeats):
+        for task_id in task_ids:
+            for arm in ARMS:
+                gecti = plus_gecen(task_id, arm, rep)
+                ekstra = {}
+                if arm == ARM_CONTRACT and task_id in retry_gorevleri and rep == 0:
+                    ekstra["attempt_count"] = 2
+                out.append(make_synthetic_record(
+                    model=MODEL, arm=arm, task_id=task_id, repeat=rep,
+                    base_pass=gecti, plus_pass=gecti, **ekstra))
+    return out
+
+
+def test_retry_tabakalari_dogru_ayrilir():
+    task_ids = [f"t{i:02d}" for i in range(4)]
+    records = _retry_kayitlari(
+        task_ids, retry_gorevleri={"t00", "t01"},
+        plus_gecen=lambda t, a, r: not (a == ARM_CONTRACT and t == "t00" and r == 0))
+    sonuc = analyze(_manifest(task_ids), records, _calls(records), iterations=ITER)
+    ro = sonuc["retry_outcome"]
+
+    assert ro["unit"] == "arm_run" and ro["exploratory"] is True
+    assert ro["undefined_reason"] is None
+    # 2 görev × yalnız ilk tekrar = 2 retry koşusu; kalan 10 koşu ilk denemede.
+    assert ro["strata"]["retried"]["runs"] == 2
+    assert ro["strata"]["first_attempt"]["runs"] == 10
+    # Retry'a giren iki koşudan biri plus'ta düştü.
+    assert ro["strata"]["retried"]["plus_pass_count"] == 1
+    assert ro["strata"]["retried"]["plus_pass_rate"] == 0.5
+    assert ro["strata"]["first_attempt"]["plus_pass_rate"] == 1.0
+
+
+def test_retry_gorev_referansi_diger_kollarin_TUM_tekrarlarini_kapsar():
+    """'Bu görevler zaten zor muydu' kontrolünün paydası görevin tamamıdır.
+
+    Yalnız retry'a giren TEKRAR alınsaydı referans, contract kolunun kendi
+    seçilimini taşırdı ve karşılaştırma anlamsızlaşırdı.
+    """
+    task_ids = [f"t{i:02d}" for i in range(4)]
+    records = _retry_kayitlari(task_ids, retry_gorevleri={"t00"},
+                               plus_gecen=lambda t, a, r: True)
+    sonuc = analyze(_manifest(task_ids), records, _calls(records), iterations=ITER)
+    ref = sonuc["retry_outcome"]["retried_task_reference"]
+
+    assert ref["n_tasks"] == 1 and ref["task_ids"] == ["t00"]
+    for arm in ARMS:
+        assert ref["by_arm"][arm]["runs"] == 3, arm
+
+
+def test_retry_hic_olmadiysa_oranlar_None_kalir():
+    """Sıfır payda 'retry başarısız oldu (0.0)' diye okunamaz."""
+    task_ids = [f"t{i:02d}" for i in range(3)]
+    records = _records(task_ids, lambda t, a: 3)
+    sonuc = analyze(_manifest(task_ids), records, _calls(records), iterations=ITER)
+    ro = sonuc["retry_outcome"]
+
+    assert ro["available"] is True
+    assert ro["undefined_reason"] == "no_retried_runs"
+    assert ro["strata"]["retried"]["runs"] == 0
+    assert ro["strata"]["retried"]["plus_pass_rate"] is None
+    assert ro["retried_task_reference"]["n_tasks"] == 0
+
+
+def test_retry_bloguna_run_error_girmez():
+    task_ids = [f"t{i:02d}" for i in range(3)]
+    records = _retry_kayitlari(task_ids, retry_gorevleri={"t00"},
+                               plus_gecen=lambda t, a, r: True)
+    temiz = analyze(_manifest(task_ids), records, _calls(records), iterations=ITER)
+    hatali = make_run_error_record(
+        experiment="sentetik", model=MODEL, task_set="heldout", arm=ARM_CONTRACT,
+        task_id="t00", repeat=0, run_id="err-1", arm_position=0, error="boom")
+    kirli = analyze(_manifest(task_ids), [*records, hatali], _calls(records),
+                    iterations=ITER)
+    assert temiz["retry_outcome"] == kirli["retry_outcome"]

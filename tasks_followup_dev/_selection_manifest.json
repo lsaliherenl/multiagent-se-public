@@ -1,0 +1,155 @@
+{
+  "artifact": "f5_study2_task_selection_manifest",
+  "canonical_solution_in_task_files": false,
+  "evaluation_backend": "bigcodebench_untrusted_check_v1",
+  "evaluation_metric": "bigcodebench_hidden_test_pass",
+  "evaluator_image_id": "sha256:3d80a30b7f8d2c511032afec5305bfa05f4e6e96db98459efc187814dd11c920",
+  "frozen_inputs": {
+    "amendment_fingerprint": "77b2b6a934e225c4fa82b56c85fb5217f4804706b43c599964a2f66d37c09296",
+    "dataset_sha256": "73a4270b43feb81abefad7bb1b592937c768ea45c3263bedc1cabd30a9a6ce79",
+    "reference_plan_fingerprint": "dd32bea6bd823350f5c55640665afbac1de3f9774fee5fd2f0fc5c6650236c4d",
+    "role_manifest_sha256": "84af0d6f43bc37a612a005f14897ffdd7eb31984a6fac6a8fb84652824718191",
+    "specification_packet_sha256": "fa6ec22806fa76b8403aae52c1eef875426a4047f7f0c02df6492809104d1421"
+  },
+  "identity_map": [
+    {
+      "assignment_position": 1,
+      "blind_id": "G9-662c0ac46c773d84",
+      "local_task_id": "bigcodebench_0199",
+      "source_task_id": "BigCodeBench/199"
+    },
+    {
+      "assignment_position": 2,
+      "blind_id": "G9-e5825c0aff54d52f",
+      "local_task_id": "bigcodebench_0454",
+      "source_task_id": "BigCodeBench/454"
+    },
+    {
+      "assignment_position": 3,
+      "blind_id": "G9-25d81d909348f764",
+      "local_task_id": "bigcodebench_0509",
+      "source_task_id": "BigCodeBench/509"
+    },
+    {
+      "assignment_position": 4,
+      "blind_id": "G9-9bdc139adeab9a10",
+      "local_task_id": "bigcodebench_0999",
+      "source_task_id": "BigCodeBench/999"
+    },
+    {
+      "assignment_position": 5,
+      "blind_id": "G9-e25e3c1e2b80bea8",
+      "local_task_id": "bigcodebench_0367",
+      "source_task_id": "BigCodeBench/367"
+    },
+    {
+      "assignment_position": 6,
+      "blind_id": "G9-7650125e30c2a4d2",
+      "local_task_id": "bigcodebench_0553",
+      "source_task_id": "BigCodeBench/553"
+    },
+    {
+      "assignment_position": 7,
+      "blind_id": "G9-0a43e4e24783f0c2",
+      "local_task_id": "bigcodebench_0458",
+      "source_task_id": "BigCodeBench/458"
+    },
+    {
+      "assignment_position": 8,
+      "blind_id": "G9-142e765832869284",
+      "local_task_id": "bigcodebench_0341",
+      "source_task_id": "BigCodeBench/341"
+    },
+    {
+      "assignment_position": 9,
+      "blind_id": "G9-4f7a36073bc99480",
+      "local_task_id": "bigcodebench_0161",
+      "source_task_id": "BigCodeBench/161"
+    },
+    {
+      "assignment_position": 10,
+      "blind_id": "G9-d51fb3a36ffa896e",
+      "local_task_id": "bigcodebench_0964",
+      "source_task_id": "BigCodeBench/964"
+    },
+    {
+      "assignment_position": 11,
+      "blind_id": "G9-088bbeb0b8507274",
+      "local_task_id": "bigcodebench_0273",
+      "source_task_id": "BigCodeBench/273"
+    },
+    {
+      "assignment_position": 12,
+      "blind_id": "G9-8590bd6a5390ef08",
+      "local_task_id": "bigcodebench_0655",
+      "source_task_id": "BigCodeBench/655"
+    },
+    {
+      "assignment_position": 13,
+      "blind_id": "G9-f21574e15b902e89",
+      "local_task_id": "bigcodebench_0879",
+      "source_task_id": "BigCodeBench/879"
+    },
+    {
+      "assignment_position": 14,
+      "blind_id": "G9-b2c4224e00cb4686",
+      "local_task_id": "bigcodebench_0501",
+      "source_task_id": "BigCodeBench/501"
+    },
+    {
+      "assignment_position": 15,
+      "blind_id": "G9-beb1c8f66b9036a3",
+      "local_task_id": "bigcodebench_0532",
+      "source_task_id": "BigCodeBench/532"
+    },
+    {
+      "assignment_position": 16,
+      "blind_id": "G9-fb836e6c8e7aff57",
+      "local_task_id": "bigcodebench_0971",
+      "source_task_id": "BigCodeBench/971"
+    }
+  ],
+  "local_id_rule": {
+    "collision_free_within_66": true,
+    "pattern": "bigcodebench_<4 haneli sıfır dolgulu kaynak numarası>",
+    "reason": "`BigCodeBench/655` slash taşır ve doğrudan dosya yolu yapılamaz; kaynakta baştaki sıfır yoktur, bu yüzden dolgu tam geri çevrilebilirdir.",
+    "reversible": true
+  },
+  "manifest_fingerprint": "9ff1930d64337dd7dc68c93d61aea06f8e7b673b33df587a1ae33843445ed0e2",
+  "model_api_llm_calls": 0,
+  "parser": {
+    "binding_gate": "Sürüm eşitliği DEĞİL, içerik eşitliği bağlayıcıdır: 66/66 instruct_prompt G9 v2 paketiyle ve 66/66 payload hash'i D3-REF v1 manifestiyle birebir doğrulanır.",
+    "frozen_parser_requirement": "pyarrow==24.0.0",
+    "observed_parser": "pyarrow==25.0.0",
+    "parser_pin_satisfied": false
+  },
+  "phase": "F2-STUDY2-F5-PREP",
+  "prep_id": "F5-PREP-STUDY2-1",
+  "prompt_field": "instruct_prompt",
+  "reference_assembly_used_for_gate_only": "complete_prompt + LF + canonical_solution",
+  "resource_manifest_sha256": "c06ae5113a8f80094b9cc93c7b23207a611c974e76cff7afc99c6934dcb0f871",
+  "role": "development",
+  "schema_version": "1.0",
+  "source": "BigCodeBench-Hard",
+  "study_id": "study2",
+  "task_count": 16,
+  "task_file_sha256": {
+    "bigcodebench_0161.json": "758730d4119b49b327f6500abe718ba40b96d329540efab9e344991ca7035625",
+    "bigcodebench_0199.json": "e67bc23ee2ce45cf54144722be4b26f53d148633ee2b7a43dc9ad321ffd46b5a",
+    "bigcodebench_0273.json": "baa8cc30efe3f155319869498f50a6e1f5c919abab536b8cc05e1323cc93b4e8",
+    "bigcodebench_0341.json": "adb72956a7058de415efa28d798c6a74c34e75d87a7481766cbb1cd3507fe2aa",
+    "bigcodebench_0367.json": "19b9c057e5973e38ba1256d9a4ab7f57c0e810a0e7b2e6b7d176cf5199c19483",
+    "bigcodebench_0454.json": "2696eee8293dc906f513ab3a87c53a66b819a7f1893b13bf6d375e833385bfff",
+    "bigcodebench_0458.json": "672767cd08b7697962fad5621e711c15503b610e7c965fe213f52e71b881ded4",
+    "bigcodebench_0501.json": "6038178716d92b91011f9f5a007eca755ba898a1aa3ff0eb653caa82ad6a9e7f",
+    "bigcodebench_0509.json": "01a1afd69bf83476f8f65e0704869a8cf73dac03d61445602800c474dfd8b2ce",
+    "bigcodebench_0532.json": "ddcd61a21be4812cbb9b49b03b792bfaf5f0e09bb1f274d1d183aa7cfbd9a74b",
+    "bigcodebench_0553.json": "94350cef414c414b06b96144352143f077c8757594a8af67792b225bd9e6c4e6",
+    "bigcodebench_0655.json": "17392154e8c7a1c60a612e4541264d0e7eeb777f75be0d378d01ef0155fc7e3d",
+    "bigcodebench_0879.json": "d06f2ce8b5cd1e8d879fdb3948307f9a97f050a400a9bef19d591d07d2182227",
+    "bigcodebench_0964.json": "85e51229adf683b73f78c364cf9beadee32a1880ea4aedbabfd588a1188ca79a",
+    "bigcodebench_0971.json": "2aef48b4e48bfae631a07fe4f929578afab9c82591a9d5869fd22e5d9bfbab1f",
+    "bigcodebench_0999.json": "b63e66036b3f704350d8c397b4ac52dc5fe44d205a0957528542c51c92895984"
+  },
+  "task_set": "followup_dev"
+}

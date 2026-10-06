@@ -40,9 +40,26 @@ and MBPP+ v0.2.0 release artifacts. It also contains material derived from the
 underlying HumanEval and MBPP datasets, so the corresponding upstream terms
 above continue to apply.
 
+## BigCodeBench and BigCodeBench-Hard
+
+- Project: <https://github.com/bigcode-project/bigcodebench>
+- Pinned evaluator source commit (Study 2 runtime image):
+  `09dd993f46c3fbf3a799465bb96d524edcb0b199`
+- Dataset: `bigcode/bigcodebench-hard`, split `v0.1.4`, revision
+  `298d2cc7b96612e15e47313c3603ee124cee0c1f`
+  (<https://huggingface.co/datasets/bigcode/bigcodebench-hard>)
+- License: Apache License 2.0 (the license of the BigCodeBench repository and
+  of the `bigcode/bigcodebench` dataset; the Hard subset is derived from it)
+- Included license copy: `LICENSES/BigCodeBench-Apache-2.0.txt`
+
+The task prompts and hidden tests in `tasks_followup_dev/` and
+`tasks_study2_complex/` are taken from BigCodeBench-Hard and remain subject to
+these terms. Canonical solutions are not included.
+
 ## Scope
 
-See `tasks/README.md`, `tasks_heldout/README.md`, and
+See `tasks/README.md`, `tasks_heldout/README.md`,
+`tasks_followup_dev/README.md`, `tasks_study2_complex/README.md`, and
 `tasks_heldout/_selection_manifest.json` for transformation, selection,
 version, checksum, and source-URL details. This notice is an attribution and
 scope record, not legal advice.

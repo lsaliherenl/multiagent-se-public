@@ -13,6 +13,12 @@ inputs and model settings constant:
 The validator node and bounded retry are the only interventions that differ
 between them; `tests/test_arm_equivalence.py` enforces this invariant.
 
+The code covers the three studies reported in the accompanying paper:
+Study 1A (EvalPlus, Gemini 3.5 Flash Lite and DeepSeek V4 Flash), Study 1B
+(the same EvalPlus tasks, Gemini and GPT-5.6 Luna), and Study 2
+(BigCodeBench-Hard, Gemini and Luna). See
+[Follow-up studies](#follow-up-studies-study-1b-and-study-2).
+
 This public distribution includes the source code, frozen task definitions,
 deterministic tests, and the supplementary material of the accompanying paper
 (see [Supplementary material](#supplementary-material)). It does not
@@ -91,6 +97,68 @@ control. The runner records task hashes, the prompt contract, the environment,
 and the Git commit in its manifest. Start a full experimental run only from a
 clean, committed working tree.
 
+To analyse one run (one model on one task set):
+
+```bash
+uv run python -m analysis.analyze --exp logs/exp_heldout_run
+```
+
+## Follow-up studies (Study 1B and Study 2)
+
+Follow-up runs use the same runner with an explicit `--study` identity. The
+second producer is selected by its role name, `followup_secondary`
+(GPT-5.6 Luna):
+
+```bash
+uv run python -m eval.runner --name study1b_gemini --study study1b \
+  --model main --task-set heldout --repeats 3
+uv run python -m eval.runner --name study1b_luna --study study1b \
+  --model followup_secondary --task-set heldout --repeats 3
+```
+
+Study 2 scores code inside the official BigCodeBench evaluation image, so it
+needs Docker. Build the pinned image and the read-only NLTK resource volume
+once (the build downloads several gigabytes):
+
+```bash
+uv run python scripts/bigcodebench_runtime.py build
+uv run python scripts/bigcodebench_runtime.py hydrate
+uv run python scripts/bigcodebench_runtime.py verify
+```
+
+Then run the two Study 2 cells:
+
+```bash
+uv run python -m eval.runner --name study2_gemini --study study2 \
+  --model main --task-set study2_complex --repeats 3
+uv run python -m eval.runner --name study2_luna --study study2 \
+  --model followup_secondary --task-set study2_complex --repeats 3
+```
+
+The runner checks the image and the resource volume before any model call,
+and records the image ID in the manifest. A fresh build can have a different
+image ID from the paper's run (apt packages are not pinned); the manifest
+states whether it matches.
+
+Each cell is analysed separately; the cross-cell estimands (moderation
+between regimes and the Study 1A to 1B bridge) come from
+`analysis/followup.py`:
+
+```bash
+uv run python -m analysis.followup \
+  --study1a-gemini logs/exp_heldout_run \
+  --study1b-gemini logs/exp_study1b_gemini --study1b-luna logs/exp_study1b_luna \
+  --study2-gemini logs/exp_study2_gemini --study2-luna logs/exp_study2_luna
+```
+
+`reproduction/paper_run_identity.json` records the identity of the paper's
+held-out runs (models, request policy, prompt-contract hash, task-file
+hashes, evaluator image). `tests/test_followup.py` checks that this code
+reproduces every field the code determines. The spend ledger, health gates,
+and authorization records that governed the original runs are not part of
+this distribution; they did not affect request content
+(`EXPERIMENT_PROTOCOL.md` §13).
+
 ## Repository structure
 
 | Path | Contents |
@@ -101,8 +169,13 @@ clean, committed working tree.
 | `analysis/` | Task-level analysis and exploratory uncertainty tooling |
 | `uncertainty/` | Self-consistency measurement |
 | `tasks/` | 20-task development and pilot set |
-| `tasks_heldout/` | 50-task EvalPlus-derived held-out set |
-| `scripts/` | Task generation, health-check, and compliance utilities |
+| `tasks_heldout/` | 50-task EvalPlus-derived held-out set (Studies 1A and 1B) |
+| `tasks_followup_dev/` | 16-task BigCodeBench-Hard development set (Study 2) |
+| `tasks_study2_complex/` | 50-task BigCodeBench-Hard held-out set (Study 2) |
+| `docker/bigcodebench/` | Pinned BigCodeBench evaluation image recipe |
+| `reproduction/` | Identity of the paper's held-out runs (no results) |
+| `supplement/` | Supplementary material of the paper |
+| `scripts/` | Task generation, evaluator runtime, health-check, and compliance utilities |
 | `tests/` | Offline, deterministic regression tests |
 
 See [`EXPERIMENT_PROTOCOL.md`](EXPERIMENT_PROTOCOL.md) for the experimental
@@ -130,17 +203,13 @@ identifiers listed at the top of this README; the paper uses reader labels
 (`baseline` = Single-call, `naive` = NL handoff, `structured_no_validation` =
 JSON handoff, `contract` = Contract).
 
-This distribution currently contains the code and tasks of the original
-EvalPlus study (Study 1A). The follow-up studies reported in the supplement
-(Study 1B and the BigCodeBench-Hard study, Study 2) are not yet included.
-
 ## Scope of results
 
 The source code itself makes no performance or effect claims. Results
-obtained with the code should be analyzed separately for the two provider
-models; repetitions must not be treated as independent samples, and findings
-should be generalized only to the EvalPlus-derived, equality-compatible
-subset.
+obtained with the code should be analyzed separately for each model and each
+study; repetitions must not be treated as independent samples. Findings
+generalize only to the EvalPlus-derived, equality-compatible subset (Studies
+1A and 1B) and to the selected BigCodeBench-Hard subset (Study 2).
 
 ## License
 

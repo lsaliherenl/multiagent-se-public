@@ -1,0 +1,29 @@
+{
+  "assignment_position": 37,
+  "blind_id": "G9-823bc6ef97b9467c",
+  "entry_point": "task_func",
+  "evaluation_backend": "bigcodebench_untrusted_check_v1",
+  "evaluation_metric": "bigcodebench_hidden_test_pass",
+  "prompt": "Generates traffic data for different vehicle types over a specified number of hours, saves the data to a CSV file with coloumns 'Time', 'Car', 'Bus', 'Truck', and 'Bike', and plots the data in a line chart with 'Time' on x-axis and 'Vehicle Count' on y-axis.\nThe function should output with:\n    tuple: Path to the CSV file and the matplotlib axes object of the line plot.\nYou should write self-contained code starting with:\n```\nimport csv\nimport os\nfrom datetime import datetime\nfrom random import randint\nimport matplotlib.pyplot as plt\nimport pandas as pd\n# Constants\nVEHICLE_TYPES = ['Car', 'Bus', 'Truck', 'Bike']\nOUTPUT_DIR = './output'\ndef task_func(hours, output_dir=OUTPUT_DIR):\n```",
+  "prompt_sha256": "d0a308dc4e90842ec3ac2d2513490393c80f0de81240cb7a69f800d975269251",
+  "provenance": {
+    "dataset_sha256": "73a4270b43feb81abefad7bb1b592937c768ea45c3263bedc1cabd30a9a6ce79",
+    "evaluator_image_id": "sha256:3d80a30b7f8d2c511032afec5305bfa05f4e6e96db98459efc187814dd11c920",
+    "prompt_field": "instruct_prompt",
+    "reference_assembly_used_for_gate_only": "complete_prompt + LF + canonical_solution",
+    "reference_gate_id": "D3-REF-3of3",
+    "reference_plan_fingerprint": "dd32bea6bd823350f5c55640665afbac1de3f9774fee5fd2f0fc5c6650236c4d",
+    "reference_state": "PASS",
+    "role_manifest_sha256": "84af0d6f43bc37a612a005f14897ffdd7eb31984a6fac6a8fb84652824718191",
+    "specification_packet_sha256": "fa6ec22806fa76b8403aae52c1eef875426a4047f7f0c02df6492809104d1421"
+  },
+  "reference_payload_sha256": "416d73c75f9a7a7113ad8dfe26058aa8615b0267dc04441db76e9844469ff50e",
+  "role": "held_out",
+  "schema_version": "1.0",
+  "source": "BigCodeBench-Hard",
+  "source_task_id": "BigCodeBench/593",
+  "task_id": "bigcodebench_0593",
+  "task_set": "study2_complex",
+  "test_code": "import unittest\nfrom unittest.mock import patch\nimport shutil\nFILE_PATH = os.path.join(OUTPUT_DIR, 'traffic_data.csv')\nclass TestCases(unittest.TestCase):\n    def setUp(self):\n        \"\"\"Set up the environment for testing.\"\"\"\n        if not os.path.exists(OUTPUT_DIR):\n            os.makedirs(OUTPUT_DIR)\n    def tearDown(self):\n        \"\"\"Clean up any files created during the tests.\"\"\"\n        # Check and remove the expected file if it exists\n        # if os.path.exists(FILE_PATH):\n        #     os.remove(FILE_PATH)\n        if os.path.exists(OUTPUT_DIR):\n            shutil.rmtree(OUTPUT_DIR)\n    @patch('matplotlib.pyplot.show')  # Mock plt.show to not render plots\n    @patch('csv.writer')  # Mock csv.writer to not actually write files\n    @patch('pandas.read_csv')  # Mock pd.read_csv to not read from disk\n    @patch(__name__ + '.randint', return_value=25)  # Mock randint to return a fixed value\n    def test_dataframe_content(self, mock_randint, mock_read_csv, mock_csv_writer, mock_plt_show):\n        mock_read_csv.return_value = pd.DataFrame({\n            'Time': ['2021-01-01 00:00:00.000000'],\n            'Car': [25], 'Bus': [25], 'Truck': [25], 'Bike': [25]\n        })\n        file_path, ax = task_func(1)\n        self.assertEqual(file_path, FILE_PATH)\n        mock_randint.assert_called()  # Ensures randint was called, but not specifics about calls\n        mock_read_csv.assert_called_with(FILE_PATH)\n        mock_plt_show.assert_called()\n    @patch(__name__ + '.pd.read_csv', return_value=pd.DataFrame(columns=['Time'] + VEHICLE_TYPES))\n    def test_empty_dataframe_on_zero_hours(self, mock_read_csv):\n        \"\"\"Check for empty DataFrame on zero hours input.\"\"\"\n        _, ax = task_func(0)\n        self.assertIsNone(ax)\n    @patch('os.makedirs')\n    @patch('os.path.exists', return_value=False)\n    def test_directory_creation(self, mock_path_exists, mock_makedirs):\n        \"\"\"Ensure directory is created if it does not exist.\"\"\"\n        if os.path.exists(OUTPUT_DIR):\n            shutil.rmtree(OUTPUT_DIR)\n        task_func(1)\n        mock_makedirs.assert_called_with(os.path.dirname(FILE_PATH))\n    @patch(__name__ + '.plt.show')\n    def test_plot_generation(self, mock_plt_show):\n        \"\"\"Verify that the plot is generated.\"\"\"\n        task_func(1)\n        mock_plt_show.assert_called()\n    @patch(__name__ + '.plt.show')  # Mock to skip plot rendering\n    def test_task_func_runs_without_error(self, mock_show):\n        \"\"\"Test task_func function to ensure it runs with given hours without raising an error.\"\"\"\n        try:\n            task_func(1)  # Attempt to run the function with a simple input\n            operation_successful = True\n        except Exception:\n            operation_successful = False\n        self.assertTrue(operation_successful, \"task_func should run without errors for given input\")",
+  "test_sha256": "abb824fba95e3efa56afe68167c441a5d4df26240d36d2826c5bf0afaa6065ed"
+}
