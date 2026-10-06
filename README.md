@@ -14,9 +14,9 @@ The validator node and bounded retry are the only interventions that differ
 between them; `tests/test_arm_equivalence.py` enforces this invariant.
 
 This public distribution includes the source code, frozen task definitions,
-and deterministic tests. It does not distribute raw model outputs,
-experimental results, manuscript drafts, publication figures, or internal
-working notes.
+deterministic tests, and the supplementary material of the accompanying paper
+(see [Supplementary material](#supplementary-material)). It does not
+distribute raw model outputs, manuscript drafts, or internal working notes.
 
 ## Setup
 
@@ -118,9 +118,25 @@ on Windows. Do not run untrusted code on a machine that contains sensitive data
 or network credentials. Use a disposable container or a separate virtual
 machine when stronger isolation is required.
 
+## Supplementary material
+
+[`supplement/Supplementary_Material.pdf`](supplement/Supplementary_Material.pdf)
+is the supplementary material of the paper "Structured Inter-Agent Handoffs
+and Validation: A Four-Arm Mechanism Study in Multi-Agent Code Generation". It
+contains Tables S1 to S13 and Figures S1 to S6, which the paper cites. The
+tables report results from the paper's frozen analysis; they were not
+regenerated from this repository. Some tables and figures print the code arm
+identifiers listed at the top of this README; the paper uses reader labels
+(`baseline` = Single-call, `naive` = NL handoff, `structured_no_validation` =
+JSON handoff, `contract` = Contract).
+
+This distribution currently contains the code and tasks of the original
+EvalPlus study (Study 1A). The follow-up studies reported in the supplement
+(Study 1B and the BigCodeBench-Hard study, Study 2) are not yet included.
+
 ## Scope of results
 
-This public source distribution makes no performance or effect claims. Results
+The source code itself makes no performance or effect claims. Results
 obtained with the code should be analyzed separately for the two provider
 models; repetitions must not be treated as independent samples, and findings
 should be generalized only to the EvalPlus-derived, equality-compatible
